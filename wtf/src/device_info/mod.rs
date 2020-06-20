@@ -13,6 +13,7 @@ use winapi::um::{
   mmsystem::*,
 };
 
+#[derive(Clone)]
 pub struct DeviceInfo {
   index: usize,
   name: String,
@@ -21,15 +22,16 @@ pub struct DeviceInfo {
 
 impl fmt::Display for DeviceInfo {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "{}\n      [", self.name)?;
-    for (i, v) in self.formats.iter().enumerate() {
-      if i != 0 {
-        write!(f, ",\n       {}", v)?;
-      } else {
-        write!(f, "{}", v)?;
-      }
-    }
-    write!(f, "]")
+    write!(f, "{}", self.name)
+    // write!(f, "{}\n      [", self.name)?;
+    // for (i, v) in self.formats.iter().enumerate() {
+    //   if i != 0 {
+    //     write!(f, ",\n       {}", v)?;
+    //   } else {
+    //     write!(f, "{}", v)?;
+    //   }
+    // }
+    // write!(f, "]")
   }
 }
 
@@ -53,11 +55,10 @@ impl DeviceInfo {
           _ => continue,
         };
         let formats = DeviceFormat::unpack(devcaps.dwFormats);
-        let info = DeviceInfo {
-          index,
-          name,
-          formats,
-        };
+        let info = DeviceInfo { index, name, formats };
+        if info.formats.is_empty() {
+          continue;
+        }
         println!(" [{}] {}", index, info);
         available_devices.push(info);
       }
@@ -77,13 +78,24 @@ impl DeviceInfo {
           continue;
         }
       };
-      let iter = available_devices
-        .iter()
-        .position(|x| x.index == user_selected_device);
-      match iter {
+      match available_devices.iter().find(|&x| x.index == user_selected_device) {
         None => println!("device #{} not in device list!", user_selected_device),
-        Some(position) => return Some(available_devices.remove(position)),
+        Some(device) => return Some(device.clone()),
       };
     }
+  }
+
+  pub fn get_best_format(&self) -> DeviceFormatInfo {
+    // let formats: Vec<DeviceFormatInfo> = self.formats.iter().map(|&x| x.get_info()).collect();
+    let freqs: [usize; 4] = [44100, 96000, 22050, 11025];
+    for &freq in &freqs {
+      let mut freq_formats: Vec<DeviceFormatInfo> = self.formats.iter().map(|&x| x.get_info()).filter(|x| x.frequency == freq).collect();
+      if !freq_formats.is_empty() {
+        freq_formats.sort_by_key(|x| x.bits);
+        freq_formats.sort_by_key(|x| x.channels);
+        return freq_formats[0];
+      }
+    }
+    panic!("should not happen")
   }
 }
