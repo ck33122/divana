@@ -40,26 +40,26 @@ impl DeviceInfo {
     println!("select your audio device:");
     let mut available_devices: Vec<DeviceInfo> = Vec::new();
     unsafe {
-      let devnum = waveInGetNumDevs() as usize;
-      if devnum == 0 {
+      let device_count = waveInGetNumDevs() as usize;
+      if device_count == 0 {
         return None;
       }
-      for index in 0..devnum {
+      for device_index in 0..device_count {
         let size = size_of::<WAVEINCAPSW>() as u32;
-        let mut devcaps = zeroed::<WAVEINCAPSW>();
-        if waveInGetDevCapsW(index, &mut devcaps, size) != MMSYSERR_NOERROR {
+        let mut device_capabilities = zeroed::<WAVEINCAPSW>();
+        if waveInGetDevCapsW(device_index, &mut device_capabilities, size) != MMSYSERR_NOERROR {
           continue;
         }
-        let name = match String::from_utf16(&devcaps.szPname) {
+        let name = match String::from_utf16(&device_capabilities.szPname) {
           Ok(res) => res,
           _ => continue,
         };
-        let formats = DeviceFormat::unpack(devcaps.dwFormats);
-        let info = DeviceInfo { index, name, formats };
+        let formats = DeviceFormat::unpack(device_capabilities.dwFormats);
+        let info = DeviceInfo { index: device_index, name, formats };
         if info.formats.is_empty() {
           continue;
         }
-        println!(" [{}] {}", index, info);
+        println!(" [{}] {}", device_index, info);
         available_devices.push(info);
       }
     }
@@ -85,15 +85,16 @@ impl DeviceInfo {
     }
   }
 
-  pub fn get_best_format(&self) -> DeviceFormatInfo {
-    // let formats: Vec<DeviceFormatInfo> = self.formats.iter().map(|&x| x.get_info()).collect();
-    let freqs: [usize; 4] = [44100, 96000, 22050, 11025];
-    for &freq in &freqs {
-      let mut freq_formats: Vec<DeviceFormatInfo> = self.formats.iter().map(|&x| x.get_info()).filter(|x| x.frequency == freq).collect();
+  pub fn get_best_format(&self) -> DeviceFormat {
+    let frequencies = DeviceFormat::relevant_frequencies();
+    for &frequency in &frequencies {
+      let mut freq_formats: Vec<&DeviceFormat> = self.formats.iter()
+        .filter(|x| x.frequency == frequency)
+        .collect();
       if !freq_formats.is_empty() {
         freq_formats.sort_by_key(|x| x.bits);
         freq_formats.sort_by_key(|x| x.channels);
-        return freq_formats[0];
+        return freq_formats[0].clone();
       }
     }
     panic!("should not happen")
