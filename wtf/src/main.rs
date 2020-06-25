@@ -10,6 +10,7 @@ use std::io::{stdin, stdout, Write};
 enum Command {
   MainMenu,
   SetupDevice,
+  Exit,
 }
 
 fn process_user_input() -> Option<String> {
@@ -25,7 +26,10 @@ fn process_user_input() -> Option<String> {
 
 // always constructed because of rust's lacks of static initialization 
 fn command_map() -> HashMap<&'static str, Command> {
-  [("setup device", Command::SetupDevice)]
+  [
+    ("setup device", Command::SetupDevice),
+    ("exit", Command::Exit)
+  ]
     .iter().cloned().collect()
 }
 
@@ -50,6 +54,9 @@ fn main() {
           Some(command) => current_command = (*command).clone(),
           None => show_help()
         };
+      }
+      Command::Exit => {
+        return;
       }
       Command::SetupDevice => {
         let device = DeviceInfo::from_selection_dialog();
