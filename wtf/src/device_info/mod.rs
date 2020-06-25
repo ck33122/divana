@@ -36,8 +36,7 @@ impl fmt::Display for DeviceInfo {
 }
 
 impl DeviceInfo {
-  pub fn from_selection_dialog() -> Option<DeviceInfo> {
-    println!("select your audio device:");
+  pub fn available_devices() -> Option<Vec<DeviceInfo>> {
     let mut available_devices: Vec<DeviceInfo> = Vec::new();
     unsafe {
       let device_count = waveInGetNumDevs() as usize;
@@ -63,6 +62,18 @@ impl DeviceInfo {
         available_devices.push(info);
       }
     }
+    Some(available_devices)
+  }
+
+  pub fn from_selection_dialog() -> Option<DeviceInfo> {
+    println!("select your audio device:");
+    let available_devices = match Self::available_devices() {
+      Some(devices) => devices,
+      None => {
+        println!("no device available!");
+        return None
+      },
+    };
     loop {
       print!("> ");
       stdout().flush().unwrap();

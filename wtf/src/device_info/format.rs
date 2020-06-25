@@ -1,7 +1,5 @@
 use std::fmt;
 use winapi::{shared::minwindef::DWORD, um::mmsystem::*};
-use std::collections::HashSet;
-use std::collections::hash_map::RandomState;
 
 // on_device_format: ($const_name: ident, $const_dword: expr, $frequency: expr, $channels: expr, $bits: expr)
 macro_rules! enumerate_device_formats {
