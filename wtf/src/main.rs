@@ -1,27 +1,14 @@
-// #![feature(const_fn)]
-
+mod ui;
 mod device_info;
 
 use device_info::*;
 use std::collections::HashMap;
-use std::io::{stdin, stdout, Write};
 
 #[derive(Copy, Clone)]
 enum Command {
   MainMenu,
   SetupDevice,
   Exit,
-}
-
-fn process_user_input() -> Option<String> {
-  let mut user_input = String::new();
-  print!("> ");
-  stdout().flush().unwrap();
-  if stdin().read_line(&mut user_input).is_err() {
-    println!("input error!");
-    return None
-  };
-  Some(user_input.trim().to_string())
 }
 
 // always constructed because of rust's lacks of static initialization 
@@ -42,11 +29,10 @@ fn show_help() {
 
 fn main() {
   let mut current_command = Command::MainMenu;
-
   loop {
     match current_command {
       Command::MainMenu => {
-        let cmd_name = match process_user_input() {
+        let cmd_name = match ui::process_user_input() {
           Some(command_name) => command_name,
           None => continue
         };
@@ -59,15 +45,25 @@ fn main() {
         return;
       }
       Command::SetupDevice => {
-        let device = DeviceInfo::from_selection_dialog();
-        match device {
-          Some(device) => {
-            println!("selected device: {}", device);
-            let fmt_info = device.get_best_format();
-            println!("current format: {}", fmt_info.format);
+        let devices = match DeviceInfo::available_devices() {
+          Some(devices) => devices,
+          None => {
+            current_command = Command::MainMenu;
+            println!("no device is currently available (may be there is no devices in your computer?)");
+            continue
           }
-          None => println!("no device is currently selected (may be there is no devices in your computer?)"),
-        }
+        };
+        let device = match ui::process_select_one_of(devices) {
+          Some(device) => device,
+          None => {
+            current_command = Command::MainMenu;
+            println!("no device is currently selected (may be there is no devices in your computer?)");
+            continue
+          }
+        };
+        println!("selected device: {}", device);
+        let format = device.get_best_format();
+        println!("current format: {}", format);
         current_command = Command::MainMenu
       }
     }

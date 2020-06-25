@@ -1,13 +1,7 @@
 mod format;
 
 use format::*;
-use std::io::stdout;
-use std::io::Write;
-use std::{
-  fmt,
-  io::stdin,
-  mem::{size_of, zeroed},
-};
+use std::{fmt, mem::{size_of, zeroed}};
 use winapi::um::{
   mmeapi::{waveInGetDevCapsW, waveInGetNumDevs},
   mmsystem::*,
@@ -23,15 +17,6 @@ pub struct DeviceInfo {
 impl fmt::Display for DeviceInfo {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{}", self.name)
-    // write!(f, "{}\n      [", self.name)?;
-    // for (i, v) in self.formats.iter().enumerate() {
-    //   if i != 0 {
-    //     write!(f, ",\n       {}", v)?;
-    //   } else {
-    //     write!(f, "{}", v)?;
-    //   }
-    // }
-    // write!(f, "]")
   }
 }
 
@@ -58,42 +43,10 @@ impl DeviceInfo {
         if info.formats.is_empty() {
           continue;
         }
-        println!(" [{}] {}", device_index, info);
         available_devices.push(info);
       }
     }
     Some(available_devices)
-  }
-
-  pub fn from_selection_dialog() -> Option<DeviceInfo> {
-    println!("select your audio device:");
-    let available_devices = match Self::available_devices() {
-      Some(devices) => devices,
-      None => {
-        println!("no device available!");
-        return None
-      },
-    };
-    loop {
-      print!("> ");
-      stdout().flush().unwrap();
-      let mut user_selected_device_string = String::new();
-      if stdin().read_line(&mut user_selected_device_string).is_err() {
-        println!("you should write number of your device!");
-        continue;
-      };
-      let user_selected_device = match user_selected_device_string.trim().parse::<usize>() {
-        Ok(res) => res,
-        Err(_) => {
-          println!("you should write number of your device!");
-          continue;
-        }
-      };
-      match available_devices.iter().find(|&x| x.index == user_selected_device) {
-        None => println!("device #{} not in device list!", user_selected_device),
-        Some(device) => return Some(device.clone()),
-      };
-    }
   }
 
   pub fn get_best_format(&self) -> DeviceFormat {
