@@ -21,13 +21,10 @@ impl fmt::Display for DeviceInfo {
 }
 
 impl DeviceInfo {
-  pub fn available_devices() -> Option<Vec<DeviceInfo>> {
+  pub fn input_devices() -> Vec<DeviceInfo> {
     let mut available_devices: Vec<DeviceInfo> = Vec::new();
     unsafe {
       let device_count = waveInGetNumDevs() as usize;
-      if device_count == 0 {
-        return None;
-      }
       for device_index in 0..device_count {
         let size = size_of::<WAVEINCAPSW>() as u32;
         let mut device_capabilities = zeroed::<WAVEINCAPSW>();
@@ -46,7 +43,7 @@ impl DeviceInfo {
         available_devices.push(info);
       }
     }
-    Some(available_devices)
+    available_devices
   }
 
   pub fn get_best_format(&self) -> DeviceFormat {

@@ -14,7 +14,7 @@ enum Command {
 // always constructed because of rust's lacks of static initialization 
 fn command_map() -> HashMap<&'static str, Command> {
   [
-    ("setup device", Command::SetupDevice),
+    ("device", Command::SetupDevice),
     ("exit", Command::Exit)
   ]
     .iter().cloned().collect()
@@ -45,24 +45,16 @@ fn main() {
         return;
       }
       Command::SetupDevice => {
-        let devices = match DeviceInfo::available_devices() {
-          Some(devices) => devices,
-          None => {
-            current_command = Command::MainMenu;
-            println!("no device is currently available (may be there is no devices in your computer?)");
-            continue
-          }
-        };
-        let device = match ui::process_select_one_of(devices) {
+        let device = match ui::process_select_one_of(DeviceInfo::input_devices()) {
           Some(device) => device,
           None => {
+            println!("no device is currently available (may be there is no devices in your computer?)");
             current_command = Command::MainMenu;
-            println!("no device is currently selected (may be there is no devices in your computer?)");
             continue
           }
         };
-        println!("selected device: {}", device);
         let format = device.get_best_format();
+        println!("selected device: {}", device);
         println!("current format: {}", format);
         current_command = Command::MainMenu
       }
