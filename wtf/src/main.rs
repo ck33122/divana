@@ -4,7 +4,7 @@ extern crate lazy_static;
 mod device_info;
 mod ui;
 
-use device_info::*;
+use {device_info::*, std::pin::Pin};
 
 #[derive(Copy, Clone)]
 enum Command {
@@ -22,6 +22,7 @@ struct DeviceSelection {
 }
 struct GlobalState {
   device_selection: Option<DeviceSelection>,
+  input: Option<Pin<Box<InputDevice>>>,
 }
 
 lazy_static! {
@@ -46,7 +47,10 @@ fn something_is_wrong() {
 }
 
 fn main() {
-  let mut state = GlobalState { device_selection: None };
+  let mut state = GlobalState {
+    device_selection: None,
+    input: None,
+  };
   let mut current_command = Command::MainMenu;
   loop {
     match current_command {
@@ -81,15 +85,19 @@ fn main() {
         };
       }
       Command::Exit => {
+        if let Some(_) = state.input {
+          state.device_selection = None;
+          state.input = None;
+        }
         return;
       }
       Command::SetupDevice => {
+        current_command = Command::MainMenu;
         let device = match ui::process_select_one_of(DeviceInfo::input_devices()) {
           Some(device) => device,
           None => {
             something_is_wrong();
             println!("no device is currently available (may be there is no devices in your computer?)");
-            current_command = Command::MainMenu;
             continue;
           }
         };
@@ -97,30 +105,29 @@ fn main() {
         println!("selected device: {}", device);
         println!("current format: {}", format);
         state.device_selection = Some(DeviceSelection { device, format });
-        current_command = Command::MainMenu
       }
       Command::StartInput => {
+        current_command = Command::MainMenu;
         let selection = match &state.device_selection {
           Some(v) => v,
           None => {
             something_is_wrong();
             println!("no device selected (before starting input select device using \"device\" command)");
-            current_command = Command::MainMenu;
             continue;
           }
         };
         println!("trying to open input for {} with format {}", selection.device, selection.format);
         match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
-          Some(err) => {
+          Err(err) => {
             something_is_wrong();
             println!("open input stream error: {}", err);
-            current_command = Command::MainMenu;
             continue;
           }
-          None => {}
+          Ok(input) => {
+            state.input = Some(input);
+          }
         }
         println!("input opened!");
-        current_command = Command::MainMenu;
       }
     }
   }

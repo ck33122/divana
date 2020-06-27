@@ -1,7 +1,9 @@
 use {
   std::{
     fmt,
-    mem::{size_of, zeroed},
+    marker::PhantomPinned,
+    mem::{size_of, transmute, zeroed},
+    pin::Pin,
   },
   thiserror::Error,
   winapi::{
@@ -11,7 +13,7 @@ use {
       mmreg::{WAVEFORMATEX, WAVE_FORMAT_PCM},
     },
     um::{
-      mmeapi::{waveInGetDevCapsW, waveInGetNumDevs, waveInOpen},
+      mmeapi::{waveInAddBuffer, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen, waveInPrepareHeader},
       mmsystem::*,
     },
   },
@@ -46,6 +48,13 @@ pub struct DeviceInfo {
   pub index: u32,
   name: String,
   formats: Vec<DeviceFormat>,
+}
+
+pub struct InputDevice {
+  buffer: Vec<i8>,
+  format: DeviceFormat,
+  pub test: &'static str,
+  _pin: PhantomPinned,
 }
 
 impl DeviceFormat {
@@ -123,7 +132,7 @@ impl DeviceInfo {
     available_devices
   }
 
-  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Option<OpenDeviceError> {
+  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Result<Pin<Box<InputDevice>>, OpenDeviceError> {
     unsafe {
       let mut format = zeroed::<WAVEFORMATEX>();
       format.wFormatTag = WAVE_FORMAT_PCM;
@@ -134,24 +143,96 @@ impl DeviceInfo {
       format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
       format.cbSize = 0;
 
+      let mut input_deice = Box::pin(InputDevice {
+        buffer: vec![0; format.nAvgBytesPerSec as usize],
+        format: requested_format,
+        test: "helo world",
+        _pin: PhantomPinned,
+      });
+      let pointer: *mut InputDevice = input_deice.as_mut().get_unchecked_mut();
+
       let mut in_handle = zeroed::<HWAVEIN>();
       match waveInOpen(
         &mut in_handle,
         device_index,
         &format,
         wave_in_callback as DWORD_PTR, // callback
-        0,                             // callback argument
+        pointer as DWORD_PTR,          // callback argument
         CALLBACK_FUNCTION,             // | WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
       ) {
         MMSYSERR_NOERROR => { /* ok */ }
-        MMSYSERR_ALLOCATED => return Some(OpenDeviceError::WaveInOpenAlreadyAllocated),
-        MMSYSERR_BADDEVICEID => return Some(OpenDeviceError::WaveInOpenBadDeviceId),
-        MMSYSERR_NODRIVER => return Some(OpenDeviceError::WaveInOpenNoDriver),
-        MMSYSERR_NOMEM => return Some(OpenDeviceError::WaveInOpenNoMem),
-        WAVERR_BADFORMAT => return Some(OpenDeviceError::WaveInOpenBadFormat),
-        code => return Some(OpenDeviceError::WaveInOpenUnknownError { code }),
+        MMSYSERR_ALLOCATED => return Err(OpenDeviceError::WaveInOpenAlreadyAllocated),
+        MMSYSERR_BADDEVICEID => return Err(OpenDeviceError::WaveInOpenBadDeviceId),
+        MMSYSERR_NODRIVER => return Err(OpenDeviceError::WaveInOpenNoDriver),
+        MMSYSERR_NOMEM => return Err(OpenDeviceError::WaveInOpenNoMem),
+        WAVERR_BADFORMAT => return Err(OpenDeviceError::WaveInOpenBadFormat),
+        code => return Err(OpenDeviceError::WaveInOpenUnknownError { code }),
       };
-      None
+
+      /*************************************************************************/
+      {
+        let ref mut instance = &*(pointer as *mut InputDevice);
+        let mut header = zeroed::<WAVEHDR>();
+        header.lpData = transmute(instance.buffer.as_ptr());
+        header.dwBufferLength = instance.buffer.len() as u32;
+        match waveInPrepareHeader(in_handle, &mut header, size_of::<WAVEHDR>() as u32) {
+          MMSYSERR_NOERROR => println!("waveInPrepareHeader ok"),
+          MMSYSERR_INVALHANDLE => {
+            println!(
+              "FIXME [need to stop processing input]: Specified device handle is invalid: {:?}",
+              in_handle
+            );
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          MMSYSERR_NODRIVER => {
+            println!("FIXME [need to stop processing input]: No device driver is present");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          MMSYSERR_NOMEM => {
+            println!("FIXME [need to stop processing input]: Unable to allocate or lock memory");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          code => {
+            println!(
+              "FIXME [need to stop processing input]: unknown error with code {} [{}]",
+              code,
+              mm_error_to_string(code)
+            );
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+        }
+
+        match waveInAddBuffer(in_handle, &mut header, size_of::<WAVEHDR>() as u32) {
+          MMSYSERR_NOERROR => {
+            println!("waveInAddBuffer ok");
+          }
+          MMSYSERR_INVALHANDLE => {
+            println!(
+              "FIXME [need to stop processing input]: Specified device handle is invalid: {:?}",
+              in_handle
+            );
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          MMSYSERR_NODRIVER => {
+            println!("FIXME [need to stop processing input]: No device driver is present");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          MMSYSERR_NOMEM => {
+            println!("FIXME [need to stop processing input]: Unable to allocate or lock memory");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          WAVERR_UNPREPARED => {
+            println!("FIXME [need to stop processing input]: The buffer pointed to by the pwh parameter hasn't been prepared");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+          _ => {
+            println!("FIXME [need to stop processing input]: unknown error");
+            return Err(OpenDeviceError::WaveInOpenNoMem);
+          }
+        }
+      }
+      /*************************************************************************/
+      Ok(input_deice)
     }
   }
 
@@ -186,21 +267,54 @@ impl fmt::Display for DeviceFormat {
   }
 }
 
-fn wave_in_callback(
+unsafe extern "C" fn wave_in_callback(
   device_handle: HWAVEIN,
   message: UINT,
   instance_data: DWORD_PTR,
   message_param_1: DWORD_PTR,
   message_param_2: DWORD_PTR,
 ) {
+  let ref mut instance = &*(instance_data as *mut InputDevice);
+  println!("test: {}", instance.test);
   match message {
     WIM_CLOSE => println!("msg: device is closed using the waveInClose function"),
     WIM_DATA => println!("msg: device driver is finished with a data block sent using the waveInAddBuffer function"),
-    WIM_OPEN => println!("msg: device is opened using the waveInOpen function"),
+    WIM_OPEN => {
+      println!("msg: device is opened using the waveInOpen function, adding buffers");
+    }
     _ => {}
   }
   println!(
     "{:?} {:?} {:?} {:?} {:?}",
     device_handle, message, instance_data, message_param_1, message_param_2
   );
+}
+
+fn mm_error_to_string(r: MMRESULT) -> &'static str {
+  match r {
+    MMSYSERR_NOERROR => "NOERROR",
+    MMSYSERR_ERROR => "ERROR",
+    MMSYSERR_BADDEVICEID => "BADDEVICEID",
+    MMSYSERR_NOTENABLED => "NOTENABLED",
+    MMSYSERR_ALLOCATED => "ALLOCATED",
+    MMSYSERR_INVALHANDLE => "INVALHANDLE",
+    MMSYSERR_NODRIVER => "NODRIVER",
+    MMSYSERR_NOMEM => "NOMEM",
+    MMSYSERR_NOTSUPPORTED => "NOTSUPPORTED",
+    MMSYSERR_BADERRNUM => "BADERRNUM",
+    MMSYSERR_INVALFLAG => "INVALFLAG",
+    MMSYSERR_INVALPARAM => "INVALPARAM",
+    MMSYSERR_HANDLEBUSY => "HANDLEBUSY",
+    MMSYSERR_INVALIDALIAS => "INVALIDALIAS",
+    MMSYSERR_BADDB => "BADDB",
+    MMSYSERR_KEYNOTFOUND => "KEYNOTFOUND",
+    MMSYSERR_READERROR => "READERROR",
+    MMSYSERR_WRITEERROR => "WRITEERROR",
+    MMSYSERR_DELETEERROR => "DELETEERROR",
+    MMSYSERR_VALNOTFOUND => "VALNOTFOUND",
+    MMSYSERR_NODRIVERCB => "NODRIVERCB",
+    MMSYSERR_MOREDATA => "MOREDATA",
+    MMSYSERR_LASTERROR => "LASTERROR",
+    _ => "[unknown (not MM-system error)]",
+  }
 }
