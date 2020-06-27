@@ -42,8 +42,8 @@ fn show_help() {
 
 fn something_is_wrong() {
   println!("\\_(@u@)_/");
-  use winapi::um::winuser::{MessageBeep, MB_ICONERROR};
-  unsafe { MessageBeep(MB_ICONERROR) };
+  // use winapi::um::winuser::{MessageBeep, MB_ICONERROR};
+  // unsafe { MessageBeep(MB_ICONERROR) };
 }
 
 fn main() {
