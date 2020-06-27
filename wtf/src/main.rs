@@ -1,44 +1,83 @@
-mod ui;
+#[macro_use(lazy_static)]
+extern crate lazy_static;
+
 mod device_info;
+mod ui;
 
 use device_info::*;
-use std::collections::HashMap;
 
 #[derive(Copy, Clone)]
 enum Command {
   MainMenu,
   SetupDevice,
   Exit,
+  StartInput,
 }
 
-// always constructed because of rust's lacks of static initialization 
-fn command_map() -> HashMap<&'static str, Command> {
-  [
+type CommandDefinition = (&'static str, Command);
+
+struct DeviceSelection {
+  device: DeviceInfo,
+  format: DeviceFormat,
+}
+struct GlobalState {
+  device_selection: Option<DeviceSelection>,
+}
+
+lazy_static! {
+  static ref COMMAND_MAP: [CommandDefinition; 3] = [
     ("device", Command::SetupDevice),
-    ("exit", Command::Exit)
-  ]
-    .iter().cloned().collect()
+    ("exit", Command::Exit),
+    ("input", Command::StartInput)
+  ];
 }
 
 fn show_help() {
   println!("available commands:");
-  for (command_name, _) in command_map() {
+  for (command_name, _) in COMMAND_MAP.iter() {
     println!("  {}", command_name);
   }
 }
 
+fn something_is_wrong() {
+  println!("\\_(@u@)_/");
+  use winapi::um::winuser::{MessageBeep, MB_ICONERROR};
+  unsafe { MessageBeep(MB_ICONERROR) };
+}
+
 fn main() {
+  let mut state = GlobalState { device_selection: None };
   let mut current_command = Command::MainMenu;
   loop {
     match current_command {
       Command::MainMenu => {
         let cmd_name = match ui::process_user_input() {
           Some(command_name) => command_name,
-          None => continue
+          None => {
+            something_is_wrong();
+            continue;
+          }
         };
-        match command_map().get(cmd_name.as_str()) {
-          Some(command) => current_command = (*command).clone(),
-          None => show_help()
+        let matched_commands: Vec<CommandDefinition> = COMMAND_MAP
+          .iter()
+          .filter(|(k, _)| k.starts_with(cmd_name.as_str()))
+          .cloned()
+          .collect();
+        match matched_commands.len() {
+          1 => current_command = matched_commands[0].1.clone(),
+          0 => {
+            println!("there is no commands matched to your query");
+            show_help();
+            something_is_wrong();
+          }
+          _ => {
+            println!("there is multiple commands matched to your query:");
+            for (key, _) in matched_commands.iter() {
+              println!("  {}", key);
+            }
+            println!("please, be more explicit");
+            something_is_wrong();
+          }
         };
       }
       Command::Exit => {
@@ -48,15 +87,40 @@ fn main() {
         let device = match ui::process_select_one_of(DeviceInfo::input_devices()) {
           Some(device) => device,
           None => {
+            something_is_wrong();
             println!("no device is currently available (may be there is no devices in your computer?)");
             current_command = Command::MainMenu;
-            continue
+            continue;
           }
         };
         let format = device.get_best_format();
         println!("selected device: {}", device);
         println!("current format: {}", format);
+        state.device_selection = Some(DeviceSelection { device, format });
         current_command = Command::MainMenu
+      }
+      Command::StartInput => {
+        let selection = match &state.device_selection {
+          Some(v) => v,
+          None => {
+            something_is_wrong();
+            println!("no device selected (before starting input select device using \"device\" command)");
+            current_command = Command::MainMenu;
+            continue;
+          }
+        };
+        println!("trying to open input for {} with format {}", selection.device, selection.format);
+        match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
+          Some(err) => {
+            something_is_wrong();
+            println!("open input stream error: {}", err);
+            current_command = Command::MainMenu;
+            continue;
+          }
+          None => {}
+        }
+        println!("input opened!");
+        current_command = Command::MainMenu;
       }
     }
   }

@@ -8,4 +8,6 @@ edition = "2018"
 
 [dependencies]
 subprocess = { git = "https://github.com/hniksic/rust-subprocess" }
-winapi = { version = "0.3.8", features = ["mmeapi"] }
+winapi = { version = "0.3.8", features = ["mmeapi", "winuser"] }
+lazy_static = "1.4.0"
+thiserror = "1.0.19"
