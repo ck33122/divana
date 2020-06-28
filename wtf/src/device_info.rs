@@ -16,7 +16,7 @@ use {
       mmreg::{WAVEFORMATEX, WAVE_FORMAT_PCM},
     },
     um::{
-      mmeapi::{waveInAddBuffer, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen, waveInPrepareHeader, waveInStart},
+      mmeapi::{waveInAddBuffer, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen, waveInPrepareHeader, waveInStart, waveInStop},
       mmsystem::*,
     },
   },
@@ -71,8 +71,10 @@ pub struct SenderThread {
 
 impl SenderThread {
   pub fn new() -> SenderThread {
-    let (sender, reciever) = mpsc::channel();
+      println!("SenderThread: new!");
+      let (sender, reciever) = mpsc::channel();
     let thread = thread::spawn(move || loop {
+      println!("SenderThread: waiting message");
       let msg = match reciever.recv() {
         Ok(data) => data,
         Err(err) => {
@@ -98,7 +100,9 @@ impl SenderThread {
   }
   pub fn stop(&mut self) {
     self.sender.send(SenderSignal::Stop).unwrap();
+    println!("SenderThread: joining!");
     self.thread.take().unwrap().join().unwrap();
+    println!("SenderThread: joining done");
   }
 }
 
@@ -107,12 +111,15 @@ impl Drop for InputDevice {
   fn drop(&mut self) {
     println!("MOVE INPUT DEVICE");
     unsafe {
+      println!("waveInStop");
+      waveInStop(self.handle);
       let buffer_layout = match Layout::array::<i8>(self.buffer_size) {
         Ok(layout) => layout,
         Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
       };
       dealloc(self.buffer as *mut u8, buffer_layout);
     }
+    println!("drop for InputDevice done");
   }
 }
 

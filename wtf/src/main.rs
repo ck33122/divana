@@ -96,6 +96,11 @@ fn main() {
       }
       Command::SetupDevice => {
         current_command = Command::MainMenu;
+        if state.input.is_some() {
+          something_is_wrong();
+          println!("cannot setup device because some device already used. need to stop it first");
+          continue;
+        }
         let device = match ui::process_select_one_of(DeviceInfo::input_devices()) {
           Some(device) => device,
           None => {
@@ -138,8 +143,10 @@ fn main() {
         println!("input opened!");
       }
       Command::StopInput => {
-        state.sender.take().map(|ref mut t| t.stop());
+        current_command = Command::MainMenu;
         state.input = None;
+        state.sender.take().map(|ref mut t| t.stop());
+        println!("stop done!");
       }
     }
   }
