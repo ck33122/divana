@@ -4,7 +4,7 @@ extern crate lazy_static;
 mod device_info;
 mod ui;
 
-use {device_info::*, std::pin::Pin};
+use device_info::*;
 
 #[derive(Copy, Clone)]
 enum Command {
@@ -22,7 +22,7 @@ struct DeviceSelection {
 }
 struct GlobalState {
   device_selection: Option<DeviceSelection>,
-  input: Option<Pin<Box<InputDevice>>>,
+  input: *mut InputDevice,
 }
 
 lazy_static! {
@@ -49,7 +49,7 @@ fn something_is_wrong() {
 fn main() {
   let mut state = GlobalState {
     device_selection: None,
-    input: None,
+    input: InputDevice::null(),
   };
   let mut current_command = Command::MainMenu;
   loop {
@@ -85,10 +85,8 @@ fn main() {
         };
       }
       Command::Exit => {
-        if let Some(_) = state.input {
-          state.device_selection = None;
-          state.input = None;
-        }
+        state.device_selection = None;
+        InputDevice::free(state.input);
         return;
       }
       Command::SetupDevice => {
@@ -123,9 +121,7 @@ fn main() {
             println!("open input stream error: {}", err);
             continue;
           }
-          Ok(input) => {
-            state.input = Some(input);
-          }
+          Ok(input) => state.input = input,
         }
         println!("input opened!");
       }

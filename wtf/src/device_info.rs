@@ -1,9 +1,10 @@
+use winapi::shared::basetsd::INT_PTR;
 use {
   std::{
+    alloc::{alloc, dealloc, Layout},
     fmt,
     marker::PhantomPinned,
     mem::{size_of, transmute, zeroed},
-    pin::Pin,
   },
   thiserror::Error,
   winapi::{
@@ -31,6 +32,8 @@ pub struct DeviceFormat {
 pub enum OpenDeviceError {
   #[error("winapi mm error {code:?}")]
   MultimediaError { code: u32, description: &'static str },
+  #[error("unknown error")]
+  UnknownError,
 }
 
 #[derive(Clone)]
@@ -41,10 +44,47 @@ pub struct DeviceInfo {
 }
 
 pub struct InputDevice {
-  buffer: Vec<i8>,
+  handle: HWAVEIN,
+  header: WAVEHDR,
+  buffer: *mut i8,
+  buffer_size: usize,
   format: DeviceFormat,
   pub test: &'static str,
-  _pin: PhantomPinned,
+}
+
+impl InputDevice {
+  pub fn new(buffer_size: usize, device_format: DeviceFormat) -> *mut InputDevice {
+    unsafe {
+      let input_device_ptr = alloc(Layout::new::<InputDevice>()) as *mut InputDevice;
+      let buffer_layout = match Layout::array::<i8>(buffer_size) {
+        Ok(layout) => layout,
+        Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
+      };
+      *input_device_ptr = InputDevice {
+        handle: zeroed::<HWAVEIN>(),
+        header: zeroed::<WAVEHDR>(),
+        buffer: alloc(buffer_layout) as *mut i8,
+        buffer_size,
+        format: device_format,
+        test: "helo world",
+      };
+      input_device_ptr
+    }
+  }
+
+  pub fn null() -> *mut InputDevice {
+    std::ptr::null::<InputDevice>() as *mut InputDevice
+  }
+
+  // pub fn is_null(this: *mut InputDevice) -> bool {
+  //   this == Self::null()
+  // }
+
+  pub fn free(this: *mut InputDevice) {
+    if this != Self::null() {
+      unimplemented!()
+    }
+  }
 }
 
 impl DeviceFormat {
@@ -53,23 +93,23 @@ impl DeviceFormat {
     // on_device_format: ($const_dword: expr, $frequency: expr, $channels: expr, $bits: expr)
     macro_rules! enumerate_device_formats {
       ($on_device_format: ident) => {
-        $on_device_format!(WAVE_FORMAT_1M08, 11025u32, 1u16, 8u16)
-        $on_device_format!(WAVE_FORMAT_1M16, 11025u32, 1u16, 16u16)
+        $on_device_format!(WAVE_FORMAT_1M08, 11025u32, 1u16, 8u16);
+        $on_device_format!(WAVE_FORMAT_1M16, 11025u32, 1u16, 16u16);
         // $on_device_format!(WAVE_FORMAT_1S08, 11025u32, 2u16, 8u16)
         // $on_device_format!(WAVE_FORMAT_1S16, 11025u32, 2u16, 16u16)
-        $on_device_format!(WAVE_FORMAT_2M08, 22050u32, 1u16, 8u16)
-        $on_device_format!(WAVE_FORMAT_2M16, 22050u32, 1u16, 16u16)
+        $on_device_format!(WAVE_FORMAT_2M08, 22050u32, 1u16, 8u16);
+        $on_device_format!(WAVE_FORMAT_2M16, 22050u32, 1u16, 16u16);
         // $on_device_format!(WAVE_FORMAT_2S08, 22050u32, 2u16, 8u16)
         // $on_device_format!(WAVE_FORMAT_2S16, 22050u32, 2u16, 16u16)
-        $on_device_format!(WAVE_FORMAT_4M08, 44100u32, 1u16, 8u16)
-        $on_device_format!(WAVE_FORMAT_4M16, 44100u32, 1u16, 16u16)
+        $on_device_format!(WAVE_FORMAT_4M08, 44100u32, 1u16, 8u16);
+        $on_device_format!(WAVE_FORMAT_4M16, 44100u32, 1u16, 16u16);
         // $on_device_format!(WAVE_FORMAT_4S08, 44100u32, 2u16, 8u16)
         // $on_device_format!(WAVE_FORMAT_4S16, 44100u32, 2u16, 16u16)
-        $on_device_format!(WAVE_FORMAT_96M08, 96000u32, 1u16, 8u16)
-        $on_device_format!(WAVE_FORMAT_96M16, 96000u32, 1u16, 16u16)
+        $on_device_format!(WAVE_FORMAT_96M08, 96000u32, 1u16, 8u16);
+        $on_device_format!(WAVE_FORMAT_96M16, 96000u32, 1u16, 16u16);
         // $on_device_format!(WAVE_FORMAT_96S08, 96000u32, 2u16, 8u16)
         // $on_device_format!(WAVE_FORMAT_96S16, 96000u32, 2u16, 16u16)
-      }
+      };
     }
     let mut result: Vec<DeviceFormat> = Vec::new();
     macro_rules! expand_device_format_enum {
@@ -122,7 +162,7 @@ impl DeviceInfo {
     available_devices
   }
 
-  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Result<Pin<Box<InputDevice>>, OpenDeviceError> {
+  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Result<*mut InputDevice, OpenDeviceError> {
     unsafe {
       let mut format = zeroed::<WAVEFORMATEX>();
       format.wFormatTag = WAVE_FORMAT_PCM;
@@ -132,25 +172,17 @@ impl DeviceInfo {
       format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
       format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
       format.cbSize = 0;
-
-      let mut input_deice = Box::pin(InputDevice {
-        buffer: vec![0; format.nAvgBytesPerSec as usize],
-        format: requested_format,
-        test: "helo world",
-        _pin: PhantomPinned,
-      });
-      let input_deice_ptr: *mut InputDevice = input_deice.as_mut().get_unchecked_mut();
-      let ref mut input_device_ref = &*(input_deice_ptr as *mut InputDevice);
+      let input_device = InputDevice::new(format.nAvgBytesPerSec as usize, requested_format);
 
       println!("opening wave device");
-      let mut in_handle = zeroed::<HWAVEIN>();
       let mmresult = waveInOpen(
-        &mut in_handle,
+        &mut (*input_device).handle,
         device_index,
         &format,
         wave_in_callback as DWORD_PTR, // callback
-        input_deice_ptr as DWORD_PTR,  // callback argument
-        CALLBACK_FUNCTION,             // | WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
+        0,
+        // input_device as DWORD_PTR,     // callback argument
+        CALLBACK_FUNCTION, // | WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
       );
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
@@ -160,10 +192,9 @@ impl DeviceInfo {
       };
 
       println!("preparing wave header");
-      let mut header = zeroed::<WAVEHDR>();
-      header.lpData = transmute(input_device_ref.buffer.as_ptr());
-      header.dwBufferLength = input_device_ref.buffer.len() as u32;
-      let mmresult = waveInPrepareHeader(in_handle, &mut header, size_of::<WAVEHDR>() as u32);
+      (*input_device).header.lpData = (*input_device).buffer;
+      (*input_device).header.dwBufferLength = (*input_device).buffer_size as u32;
+      let mmresult = waveInPrepareHeader((*input_device).handle, &mut (*input_device).header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -172,7 +203,7 @@ impl DeviceInfo {
       };
 
       println!("adding wave buffer");
-      let mmresult = waveInAddBuffer(in_handle, &mut header, size_of::<WAVEHDR>() as u32);
+      let mmresult = waveInAddBuffer((*input_device).handle, &mut (*input_device).header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -181,7 +212,7 @@ impl DeviceInfo {
       };
 
       println!("running input");
-      let mmresult = waveInStart(in_handle);
+      let mmresult = waveInStart((*input_device).handle);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -189,7 +220,7 @@ impl DeviceInfo {
         });
       };
 
-      Ok(input_deice)
+      Ok(input_device)
     }
   }
 
@@ -224,25 +255,27 @@ impl fmt::Display for DeviceFormat {
   }
 }
 
-unsafe extern "C" fn wave_in_callback(
+unsafe extern "stdcall" fn wave_in_callback(
   device_handle: HWAVEIN,
   message: UINT,
   instance_data: DWORD_PTR,
   message_param_1: DWORD_PTR,
   message_param_2: DWORD_PTR,
-) {
-  let ref mut instance = &*(instance_data as *mut InputDevice);
-  println!("test: {}", instance.test);
+) -> INT_PTR {
+  println!("CALLBACK!");
+  // let instance = instance_data as *mut InputDevice;
+  // println!("test: {}", (*instance).test);
   match message {
     WIM_CLOSE => println!("msg: device is closed using the waveInClose function"),
     WIM_DATA => println!("msg: device driver is finished with a data block sent using the waveInAddBuffer function"),
     WIM_OPEN => println!("msg: device is opened using the waveInOpen function, adding buffers"),
     _ => {}
-  }
-  println!(
-    "{:?} {:?} {:?} {:?} {:?}",
-    device_handle, message, instance_data, message_param_1, message_param_2
-  );
+  };
+  1
+  // println!(
+  //   "{:?} {:?} {:?} {:?} {:?}",
+  //   device_handle, message, instance_data, message_param_1, message_param_2
+  // );
 }
 
 fn mm_error_to_string(r: MMRESULT) -> &'static str {
