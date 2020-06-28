@@ -12,6 +12,7 @@ enum Command {
   SetupDevice,
   Exit,
   StartInput,
+  StopInput,
 }
 
 type CommandDefinition = (&'static str, Command);
@@ -22,14 +23,16 @@ struct DeviceSelection {
 }
 struct GlobalState {
   device_selection: Option<DeviceSelection>,
-  input: *mut InputDevice,
+  input: Option<InputDevicePtr>,
+  sender: Option<SenderThread>,
 }
 
 lazy_static! {
-  static ref COMMAND_MAP: [CommandDefinition; 3] = [
+  static ref COMMAND_MAP: [CommandDefinition; 4] = [
     ("device", Command::SetupDevice),
     ("exit", Command::Exit),
-    ("input", Command::StartInput)
+    ("input", Command::StartInput),
+    ("stop", Command::StopInput),
   ];
 }
 
@@ -49,7 +52,8 @@ fn something_is_wrong() {
 fn main() {
   let mut state = GlobalState {
     device_selection: None,
-    input: InputDevice::null(),
+    input: None,
+    sender: None,
   };
   let mut current_command = Command::MainMenu;
   loop {
@@ -86,7 +90,8 @@ fn main() {
       }
       Command::Exit => {
         state.device_selection = None;
-        InputDevice::free(state.input);
+        state.input = None;
+        state.sender.take().map(|ref mut t| t.stop());
         return;
       }
       Command::SetupDevice => {
@@ -106,7 +111,7 @@ fn main() {
       }
       Command::StartInput => {
         current_command = Command::MainMenu;
-        if !InputDevice::is_null(state.input) {
+        if state.input.is_some() {
           something_is_wrong();
           println!("could not start input because it is already started");
           continue;
@@ -119,16 +124,22 @@ fn main() {
             continue;
           }
         };
+        state.sender.take().map(|ref mut t| t.stop());
+        state.sender = Some(SenderThread::new());
         println!("trying to open input for {} with format {}", selection.device, selection.format);
-        match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
+        match DeviceInfo::open_input_stream(selection.format, selection.device.index, state.sender.as_ref().unwrap()) {
           Err(err) => {
             something_is_wrong();
             println!("open input stream error: {}", err);
             continue;
           }
-          Ok(input) => state.input = input,
+          Ok(input) => state.input = Some(input),
         }
         println!("input opened!");
+      }
+      Command::StopInput => {
+        state.sender.take().map(|ref mut t| t.stop());
+        state.input = None;
       }
     }
   }

@@ -4,6 +4,9 @@ use {
     alloc::{alloc, alloc_zeroed, dealloc, Layout},
     fmt,
     mem::{size_of, zeroed},
+    pin::Pin,
+    sync::mpsc,
+    thread,
   },
   thiserror::Error,
   winapi::{
@@ -42,55 +45,93 @@ pub struct DeviceInfo {
   formats: Vec<DeviceFormat>,
 }
 
-// TODO check Pin<Box<>>, it may help...
 pub struct InputDevice {
   handle: HWAVEIN,
   header: WAVEHDR,
   buffer: *mut i8,
   buffer_size: usize,
   format: DeviceFormat,
+  sender: mpsc::Sender<SenderSignal>,
   pub test: &'static str,
 }
 
-impl InputDevice {
-  pub fn new(buffer_size: usize, device_format: DeviceFormat) -> *mut InputDevice {
+pub type InputDevicePtr = Pin<Box<InputDevice>>;
+
+pub enum SenderSignal {
+  Init,
+  Stop,
+  Start,
+  NewData,
+}
+
+pub struct SenderThread {
+  sender: mpsc::Sender<SenderSignal>,
+  thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SenderThread {
+  pub fn new() -> SenderThread {
+    let (sender, reciever) = mpsc::channel();
+    let thread = thread::spawn(move || loop {
+      let msg = match reciever.recv() {
+        Ok(data) => data,
+        Err(err) => {
+          println!("SenderThread: recv error {}", err);
+          continue;
+        }
+      };
+      match msg {
+        SenderSignal::Init => println!("SenderThread: initialized!"),
+        SenderSignal::Stop => {
+          println!("SenderThread: stop!");
+          return;
+        }
+        SenderSignal::Start => println!("SenderThread: start"),
+        SenderSignal::NewData => println!("SenderThread: new data"),
+      }
+    });
+    sender.send(SenderSignal::Init).unwrap();
+    SenderThread {
+      sender,
+      thread: Some(thread),
+    }
+  }
+  pub fn stop(&mut self) {
+    self.sender.send(SenderSignal::Stop).unwrap();
+    self.thread.take().unwrap().join().unwrap();
+  }
+}
+
+// TODO may be call waveInStop around here?
+impl Drop for InputDevice {
+  fn drop(&mut self) {
+    println!("MOVE INPUT DEVICE");
     unsafe {
-      let input_device_ptr = alloc(Layout::new::<InputDevice>()) as *mut InputDevice;
+      let buffer_layout = match Layout::array::<i8>(self.buffer_size) {
+        Ok(layout) => layout,
+        Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
+      };
+      dealloc(self.buffer as *mut u8, buffer_layout);
+    }
+  }
+}
+
+impl InputDevice {
+  pub fn new(buffer_size: usize, device_format: DeviceFormat, sender: mpsc::Sender<SenderSignal>) -> InputDevicePtr {
+    unsafe {
       let buffer_layout = match Layout::array::<i8>(buffer_size) {
         Ok(layout) => layout,
         Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
       };
-      *input_device_ptr = InputDevice {
+      Box::pin(InputDevice {
         handle: zeroed::<HWAVEIN>(),
         header: zeroed::<WAVEHDR>(),
         buffer: alloc_zeroed(buffer_layout) as *mut i8,
         buffer_size,
+        sender,
         format: device_format,
         test: "helo world",
-      };
-      input_device_ptr
-    }
-  }
-
-  pub fn null() -> *mut InputDevice {
-    std::ptr::null::<InputDevice>() as *mut InputDevice
-  }
-
-  pub fn is_null(this: *mut InputDevice) -> bool {
-    this == Self::null()
-  }
-
-  // TODO may be call waveInStop around here?
-  pub fn free(this: *mut InputDevice) {
-    if this != Self::null() {
-      unsafe {
-        let buffer_layout = match Layout::array::<i8>((*this).buffer_size) {
-          Ok(layout) => layout,
-          Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
-        };
-        dealloc((*this).buffer as *mut u8, buffer_layout);
-        dealloc(this as *mut u8, Layout::new::<InputDevice>());
-      }
+      })
     }
   }
 }
@@ -170,7 +211,11 @@ impl DeviceInfo {
     available_devices
   }
 
-  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Result<*mut InputDevice, OpenDeviceError> {
+  pub fn open_input_stream(
+    requested_format: DeviceFormat,
+    device_index: u32,
+    sender: &SenderThread,
+  ) -> Result<InputDevicePtr, OpenDeviceError> {
     unsafe {
       let mut format = zeroed::<WAVEFORMATEX>();
       format.wFormatTag = WAVE_FORMAT_PCM;
@@ -180,15 +225,16 @@ impl DeviceInfo {
       format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
       format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
       format.cbSize = 0;
-      let input_device = InputDevice::new(format.nAvgBytesPerSec as usize, requested_format);
+      let mut input_device = InputDevice::new(format.nAvgBytesPerSec as usize, requested_format, sender.sender.clone());
+      let input_device_ptr: *mut InputDevice = input_device.as_mut().get_unchecked_mut();
 
       println!("opening wave device");
       let mmresult = waveInOpen(
-        &mut (*input_device).handle,
+        &mut input_device.handle,
         device_index,
         &format,
         wave_in_callback as DWORD_PTR,
-        input_device as DWORD_PTR,
+        input_device_ptr as DWORD_PTR,
         CALLBACK_FUNCTION, // | WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
       );
       if mmresult != MMSYSERR_NOERROR {
@@ -199,9 +245,9 @@ impl DeviceInfo {
       };
 
       println!("preparing wave header");
-      (*input_device).header.lpData = (*input_device).buffer;
-      (*input_device).header.dwBufferLength = (*input_device).buffer_size as u32;
-      let mmresult = waveInPrepareHeader((*input_device).handle, &mut (*input_device).header, size_of::<WAVEHDR>() as u32);
+      input_device.header.lpData = input_device.buffer;
+      input_device.header.dwBufferLength = input_device.buffer_size as u32;
+      let mmresult = waveInPrepareHeader(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -210,7 +256,7 @@ impl DeviceInfo {
       };
 
       println!("adding wave buffer");
-      let mmresult = waveInAddBuffer((*input_device).handle, &mut (*input_device).header, size_of::<WAVEHDR>() as u32);
+      let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -219,7 +265,7 @@ impl DeviceInfo {
       };
 
       println!("running input");
-      let mmresult = waveInStart((*input_device).handle);
+      let mmresult = waveInStart(input_device.handle);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
           code: mmresult,
@@ -265,11 +311,16 @@ impl fmt::Display for DeviceFormat {
 unsafe extern "stdcall" fn wave_in_callback(
   device_handle: HWAVEIN,
   message: UINT,
-  _instance_data: DWORD_PTR,
+  instance_data: DWORD_PTR,
   message_param_1: DWORD_PTR,
   message_param_2: DWORD_PTR,
 ) -> INT_PTR {
-  // let instance = instance_data as *mut InputDevice;
+  let instance = instance_data as *mut InputDevice;
+  if instance == std::ptr::null_mut() {
+    println!("error! instance_data == 0");
+    return 1;
+  }
+  //--------------------------------------------------------------
   let msg = match message {
     WIM_CLOSE => "device is closed using the waveInClose function",
     WIM_DATA => "device driver is finished with a data block sent using the waveInAddBuffer function",
@@ -280,6 +331,13 @@ unsafe extern "stdcall" fn wave_in_callback(
     "callback! [{}] on handle {:?} with params: {:?} {:?}",
     msg, device_handle, message_param_1, message_param_2
   );
+  //--------------------------------------------------------------
+  match message {
+    WIM_CLOSE => (*instance).sender.send(SenderSignal::Stop).unwrap(), // TODO unwrap here is not good idea
+    WIM_DATA => (*instance).sender.send(SenderSignal::NewData).unwrap(),
+    WIM_OPEN => (*instance).sender.send(SenderSignal::Start).unwrap(),
+    _ => {}
+  };
   1
 }
 
