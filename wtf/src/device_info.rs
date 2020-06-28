@@ -1,10 +1,9 @@
 use winapi::shared::basetsd::INT_PTR;
 use {
   std::{
-    alloc::{alloc, dealloc, Layout},
+    alloc::{alloc, alloc_zeroed, dealloc, Layout},
     fmt,
-    marker::PhantomPinned,
-    mem::{size_of, transmute, zeroed},
+    mem::{size_of, zeroed},
   },
   thiserror::Error,
   winapi::{
@@ -43,6 +42,7 @@ pub struct DeviceInfo {
   formats: Vec<DeviceFormat>,
 }
 
+// TODO check Pin<Box<>>, it may help...
 pub struct InputDevice {
   handle: HWAVEIN,
   header: WAVEHDR,
@@ -63,7 +63,7 @@ impl InputDevice {
       *input_device_ptr = InputDevice {
         handle: zeroed::<HWAVEIN>(),
         header: zeroed::<WAVEHDR>(),
-        buffer: alloc(buffer_layout) as *mut i8,
+        buffer: alloc_zeroed(buffer_layout) as *mut i8,
         buffer_size,
         format: device_format,
         test: "helo world",
@@ -76,13 +76,21 @@ impl InputDevice {
     std::ptr::null::<InputDevice>() as *mut InputDevice
   }
 
-  // pub fn is_null(this: *mut InputDevice) -> bool {
-  //   this == Self::null()
-  // }
+  pub fn is_null(this: *mut InputDevice) -> bool {
+    this == Self::null()
+  }
 
+  // TODO may be call waveInStop around here?
   pub fn free(this: *mut InputDevice) {
     if this != Self::null() {
-      unimplemented!()
+      unsafe {
+        let buffer_layout = match Layout::array::<i8>((*this).buffer_size) {
+          Ok(layout) => layout,
+          Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
+        };
+        dealloc((*this).buffer as *mut u8, buffer_layout);
+        dealloc(this as *mut u8, Layout::new::<InputDevice>());
+      }
     }
   }
 }
@@ -179,9 +187,8 @@ impl DeviceInfo {
         &mut (*input_device).handle,
         device_index,
         &format,
-        wave_in_callback as DWORD_PTR, // callback
-        0,
-        // input_device as DWORD_PTR,     // callback argument
+        wave_in_callback as DWORD_PTR,
+        input_device as DWORD_PTR,
         CALLBACK_FUNCTION, // | WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
       );
       if mmresult != MMSYSERR_NOERROR {
@@ -258,24 +265,22 @@ impl fmt::Display for DeviceFormat {
 unsafe extern "stdcall" fn wave_in_callback(
   device_handle: HWAVEIN,
   message: UINT,
-  instance_data: DWORD_PTR,
+  _instance_data: DWORD_PTR,
   message_param_1: DWORD_PTR,
   message_param_2: DWORD_PTR,
 ) -> INT_PTR {
-  println!("CALLBACK!");
   // let instance = instance_data as *mut InputDevice;
-  // println!("test: {}", (*instance).test);
-  match message {
-    WIM_CLOSE => println!("msg: device is closed using the waveInClose function"),
-    WIM_DATA => println!("msg: device driver is finished with a data block sent using the waveInAddBuffer function"),
-    WIM_OPEN => println!("msg: device is opened using the waveInOpen function, adding buffers"),
-    _ => {}
+  let msg = match message {
+    WIM_CLOSE => "device is closed using the waveInClose function",
+    WIM_DATA => "device driver is finished with a data block sent using the waveInAddBuffer function",
+    WIM_OPEN => "device is opened using the waveInOpen function",
+    _ => "unknown",
   };
+  println!(
+    "callback! [{}] on handle {:?} with params: {:?} {:?}",
+    msg, device_handle, message_param_1, message_param_2
+  );
   1
-  // println!(
-  //   "{:?} {:?} {:?} {:?} {:?}",
-  //   device_handle, message, instance_data, message_param_1, message_param_2
-  // );
 }
 
 fn mm_error_to_string(r: MMRESULT) -> &'static str {
@@ -302,7 +307,6 @@ fn mm_error_to_string(r: MMRESULT) -> &'static str {
     MMSYSERR_VALNOTFOUND => "VALNOTFOUND",
     MMSYSERR_NODRIVERCB => "NODRIVERCB",
     MMSYSERR_MOREDATA => "MOREDATA",
-    MMSYSERR_LASTERROR => "LASTERROR",
     _ => "[unknown (not MM-system error)]",
   }
 }

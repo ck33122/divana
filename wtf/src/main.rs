@@ -106,6 +106,11 @@ fn main() {
       }
       Command::StartInput => {
         current_command = Command::MainMenu;
+        if !InputDevice::is_null(state.input) {
+          something_is_wrong();
+          println!("could not start input because it is already started");
+          continue;
+        }
         let selection = match &state.device_selection {
           Some(v) => v,
           None => {
