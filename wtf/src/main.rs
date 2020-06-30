@@ -130,22 +130,24 @@ fn main() {
           }
         };
         state.sender.take().map(|ref mut t| t.stop());
-        state.sender = Some(SenderThread::new());
         println!("trying to open input for {} with format {}", selection.device, selection.format);
-        match DeviceInfo::open_input_stream(selection.format, selection.device.index, state.sender.as_ref().unwrap()) {
+        match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
           Err(err) => {
             something_is_wrong();
             println!("open input stream error: {}", err);
             continue;
           }
-          Ok(input) => state.input = Some(input),
+          Ok((input, sender)) => {
+            state.input = Some(input);
+            state.sender = Some(sender);
+          }
         }
         println!("input opened!");
       }
       Command::StopInput => {
         current_command = Command::MainMenu;
-        state.input = None;
         state.sender.take().map(|ref mut t| t.stop());
+        state.input = None;
         println!("stop done!");
       }
     }

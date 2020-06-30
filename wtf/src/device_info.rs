@@ -22,6 +22,12 @@ use {
   },
 };
 
+const WHDR_DONE: DWORD = 0x00000001; /* done bit */
+const WHDR_PREPARED: DWORD = 0x00000002; /* set if this header has been prepared */
+const WHDR_BEGINLOOP: DWORD = 0x00000004; /* loop start block */
+const WHDR_ENDLOOP: DWORD = 0x00000008; /* loop end block */
+const WHDR_INQUEUE: DWORD = 0x00000010; /* reserved for driver */
+
 #[derive(Clone, Copy)]
 pub struct DeviceFormat {
   pub format: DWORD,
@@ -57,6 +63,10 @@ pub struct InputDevice {
 
 pub type InputDevicePtr = Pin<Box<InputDevice>>;
 
+struct InputDeviceRawPtr(*mut InputDevice);
+unsafe impl Send for InputDeviceRawPtr {}
+unsafe impl Sync for InputDeviceRawPtr {}
+
 pub enum SenderSignal {
   Init,
   Stop,
@@ -70,11 +80,14 @@ pub struct SenderThread {
 }
 
 impl SenderThread {
-  pub fn new() -> SenderThread {
-      println!("SenderThread: new!");
-      let (sender, reciever) = mpsc::channel();
+  pub unsafe fn new(
+    input_device_ptr: *mut InputDevice,
+    sender: mpsc::Sender<SenderSignal>,
+    reciever: mpsc::Receiver<SenderSignal>,
+  ) -> SenderThread {
+    let input_device_ptr = InputDeviceRawPtr(input_device_ptr);
     let thread = thread::spawn(move || loop {
-      println!("SenderThread: waiting message");
+      let ref mut input_device = *input_device_ptr.0;
       let msg = match reciever.recv() {
         Ok(data) => data,
         Err(err) => {
@@ -89,7 +102,29 @@ impl SenderThread {
           return;
         }
         SenderSignal::Start => println!("SenderThread: start"),
-        SenderSignal::NewData => println!("SenderThread: new data"),
+        SenderSignal::NewData => {
+          if input_device.header.dwFlags & WHDR_DONE != 0 {
+            // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
+            // (*input_device_ptr).header.lpData: *mut i8
+            // (*input_device_ptr).header.dwBufferLength: u32
+            println!("WHDR_DONE");
+
+            let mmresult = waveInPrepareHeader(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
+            if mmresult != MMSYSERR_NOERROR {
+              println!("waveInPrepareHeader error {}", mm_error_to_string(mmresult));
+              continue;
+            };
+
+            let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
+            if mmresult != MMSYSERR_NOERROR {
+              println!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
+              continue;
+            };
+          } else {
+            println!("WARN: header.dwFlags not handled!");
+          }
+          println!("SenderThread: new data");
+        }
       }
     });
     sender.send(SenderSignal::Init).unwrap();
@@ -106,7 +141,8 @@ impl SenderThread {
   }
 }
 
-// TODO may be call waveInStop around here?
+// TODO this drop is wery connected (depends on) to SenderThread stop method, so is it good idea to split it that way?
+//      may be is good idea to make abstraction based on InputDevice and SenderThread and return it to user
 impl Drop for InputDevice {
   fn drop(&mut self) {
     println!("MOVE INPUT DEVICE");
@@ -218,11 +254,7 @@ impl DeviceInfo {
     available_devices
   }
 
-  pub fn open_input_stream(
-    requested_format: DeviceFormat,
-    device_index: u32,
-    sender: &SenderThread,
-  ) -> Result<InputDevicePtr, OpenDeviceError> {
+  pub fn open_input_stream(requested_format: DeviceFormat, device_index: u32) -> Result<(InputDevicePtr, SenderThread), OpenDeviceError> {
     unsafe {
       let mut format = zeroed::<WAVEFORMATEX>();
       format.wFormatTag = WAVE_FORMAT_PCM;
@@ -232,10 +264,11 @@ impl DeviceInfo {
       format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
       format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
       format.cbSize = 0;
-      let mut input_device = InputDevice::new(format.nAvgBytesPerSec as usize, requested_format, sender.sender.clone());
+      let (sender, reciever) = mpsc::channel();
+      let mut input_device = InputDevice::new(format.nAvgBytesPerSec as usize, requested_format, sender.clone());
       let input_device_ptr: *mut InputDevice = input_device.as_mut().get_unchecked_mut();
+      let sender_thread = SenderThread::new(input_device_ptr, sender.clone(), reciever);
 
-      println!("opening wave device");
       let mmresult = waveInOpen(
         &mut input_device.handle,
         device_index,
@@ -251,7 +284,6 @@ impl DeviceInfo {
         });
       };
 
-      println!("preparing wave header");
       input_device.header.lpData = input_device.buffer;
       input_device.header.dwBufferLength = input_device.buffer_size as u32;
       let mmresult = waveInPrepareHeader(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
@@ -262,7 +294,6 @@ impl DeviceInfo {
         });
       };
 
-      println!("adding wave buffer");
       let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         return Err(OpenDeviceError::MultimediaError {
@@ -280,7 +311,7 @@ impl DeviceInfo {
         });
       };
 
-      Ok(input_device)
+      Ok((input_device, sender_thread))
     }
   }
 
@@ -323,24 +354,18 @@ unsafe extern "stdcall" fn wave_in_callback(
   message_param_2: DWORD_PTR,
 ) -> INT_PTR {
   let instance = instance_data as *mut InputDevice;
-  if instance == std::ptr::null_mut() {
-    println!("error! instance_data == 0");
-    return 1;
-  }
   //--------------------------------------------------------------
   let msg = match message {
-    WIM_CLOSE => "device is closed using the waveInClose function",
-    WIM_DATA => "device driver is finished with a data block sent using the waveInAddBuffer function",
-    WIM_OPEN => "device is opened using the waveInOpen function",
+    WIM_CLOSE => "WIM_CLOSE",
+    WIM_DATA => "WIM_DATA",
+    WIM_OPEN => "WIM_OPEN",
     _ => "unknown",
   };
-  println!(
-    "callback! [{}] on handle {:?} with params: {:?} {:?}",
-    msg, device_handle, message_param_1, message_param_2
-  );
+  println!("wave_in_callback: {} with params: {:?} {:?}", msg, message_param_1, message_param_2);
   //--------------------------------------------------------------
+  // TODO unwrap here is not good idea (it gives error if sender is dropped)
   match message {
-    WIM_CLOSE => (*instance).sender.send(SenderSignal::Stop).unwrap(), // TODO unwrap here is not good idea
+    WIM_CLOSE => (*instance).sender.send(SenderSignal::Stop).unwrap(),
     WIM_DATA => (*instance).sender.send(SenderSignal::NewData).unwrap(),
     WIM_OPEN => (*instance).sender.send(SenderSignal::Start).unwrap(),
     _ => {}
