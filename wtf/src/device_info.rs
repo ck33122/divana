@@ -16,7 +16,10 @@ use {
       mmreg::{WAVEFORMATEX, WAVE_FORMAT_PCM},
     },
     um::{
-      mmeapi::{waveInAddBuffer, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen, waveInPrepareHeader, waveInStart, waveInStop},
+      mmeapi::{
+        waveInAddBuffer, waveInClose, waveInGetDevCapsW, waveInGetNumDevs, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
+        waveInStop, waveInUnprepareHeader,
+      },
       mmsystem::*,
     },
   },
@@ -27,6 +30,26 @@ const WHDR_PREPARED: DWORD = 0x00000002; /* set if this header has been prepared
 const WHDR_BEGINLOOP: DWORD = 0x00000004; /* loop start block */
 const WHDR_ENDLOOP: DWORD = 0x00000008; /* loop end block */
 const WHDR_INQUEUE: DWORD = 0x00000010; /* reserved for driver */
+
+fn whdr_to_str(whdr: DWORD) -> String {
+  let mut res = vec![];
+  if whdr & WHDR_DONE != 0 {
+    res.push("WHDR_DONE")
+  };
+  if whdr & WHDR_PREPARED != 0 {
+    res.push("WHDR_PREPARED")
+  };
+  if whdr & WHDR_BEGINLOOP != 0 {
+    res.push("WHDR_BEGINLOOP")
+  };
+  if whdr & WHDR_ENDLOOP != 0 {
+    res.push("WHDR_ENDLOOP")
+  };
+  if whdr & WHDR_INQUEUE != 0 {
+    res.push("WHDR_INQUEUE")
+  };
+  res.join(",")
+}
 
 #[derive(Clone, Copy)]
 pub struct DeviceFormat {
@@ -107,21 +130,18 @@ impl SenderThread {
             // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
             // (*input_device_ptr).header.lpData: *mut i8
             // (*input_device_ptr).header.dwBufferLength: u32
-            println!("WHDR_DONE");
-
             let mmresult = waveInPrepareHeader(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
             if mmresult != MMSYSERR_NOERROR {
               println!("waveInPrepareHeader error {}", mm_error_to_string(mmresult));
-              continue;
-            };
-
-            let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
-            if mmresult != MMSYSERR_NOERROR {
-              println!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
-              continue;
+            } else {
+              println!("waveInAddBuffer");
+              let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
+              if mmresult != MMSYSERR_NOERROR {
+                println!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
+              };
             };
           } else {
-            println!("WARN: header.dwFlags not handled!");
+            println!("WARN: header.dwFlags = {} not handled!", whdr_to_str(input_device.header.dwFlags));
           }
           println!("SenderThread: new data");
         }
@@ -134,7 +154,7 @@ impl SenderThread {
     }
   }
   pub fn stop(&mut self) {
-    self.sender.send(SenderSignal::Stop).unwrap();
+    // self.sender.send(SenderSignal::Stop).unwrap();
     println!("SenderThread: joining!");
     self.thread.take().unwrap().join().unwrap();
     println!("SenderThread: joining done");
@@ -148,12 +168,28 @@ impl Drop for InputDevice {
     println!("MOVE INPUT DEVICE");
     unsafe {
       println!("waveInStop");
-      waveInStop(self.handle);
-      let buffer_layout = match Layout::array::<i8>(self.buffer_size) {
-        Ok(layout) => layout,
-        Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
+      let mmresult = waveInStop(self.handle);
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveInStop: {}", mm_error_to_string(mmresult));
       };
-      dealloc(self.buffer as *mut u8, buffer_layout);
+
+      println!("waveInReset");
+      let mmresult = waveInReset(self.handle);
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveInReset: {}", mm_error_to_string(mmresult));
+      };
+
+      println!("waveInUnprepareHeader");
+      let mmresult = waveInUnprepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveInUnprepareHeader: {}", mm_error_to_string(mmresult));
+      };
+
+      println!("waveInClose");
+      let mmresult = waveInClose(self.handle);
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveInClose: {}", mm_error_to_string(mmresult));
+      };
     }
     println!("drop for InputDevice done");
   }
@@ -353,7 +389,42 @@ unsafe extern "stdcall" fn wave_in_callback(
   message_param_1: DWORD_PTR,
   message_param_2: DWORD_PTR,
 ) -> INT_PTR {
+  if message != WIM_DATA && message != WIM_CLOSE && message != WIM_OPEN {
+    println!("CALLBACK ERROR GOT UNKNOWN MESSAGE");
+    return 0;
+  }
+
   let instance = instance_data as *mut InputDevice;
+  let ref mut input_device = *instance;
+
+  if message == WIM_DATA {
+    if input_device.header.dwFlags & WHDR_DONE != 0 {
+      // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
+      // (*input_device_ptr).header.lpData: *mut i8
+      // (*input_device_ptr).header.dwBufferLength: u32
+      println!("waveInPrepareHeader");
+      // TODO send buffer here?????
+      // let mmresult = waveInPrepareHeader(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
+      // if mmresult != MMSYSERR_NOERROR {
+      //   println!("waveInPrepareHeader error {}", mm_error_to_string(mmresult));
+      // } else {
+      //   println!("waveInAddBuffer");
+      //   let mmresult = waveInAddBuffer(input_device.handle, &mut input_device.header, size_of::<WAVEHDR>() as u32);
+      //   if mmresult != MMSYSERR_NOERROR {
+      //     println!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
+      //   };
+      // };
+    }
+  } else if message == WIM_CLOSE {
+    println!("EXITING!");
+    let buffer_layout = match Layout::array::<i8>(input_device.buffer_size) {
+      Ok(layout) => layout,
+      Err(_) => panic!("cannot determine buffer layout for InputDevice.buffer"),
+    };
+    dealloc(input_device.buffer as *mut u8, buffer_layout);
+    return 1;
+  }
+
   //--------------------------------------------------------------
   let msg = match message {
     WIM_CLOSE => "WIM_CLOSE",

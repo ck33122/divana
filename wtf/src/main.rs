@@ -146,8 +146,8 @@ fn main() {
       }
       Command::StopInput => {
         current_command = Command::MainMenu;
-        state.sender.take().map(|ref mut t| t.stop());
         state.input = None;
+        state.sender.take().map(|ref mut t| t.stop());
         println!("stop done!");
       }
     }
