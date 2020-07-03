@@ -1,10 +1,10 @@
 #[macro_use(lazy_static)]
 extern crate lazy_static;
 
-mod device_info;
+mod device;
 mod ui;
 
-use device_info::*;
+use device::{info::*, input::*};
 
 #[derive(Copy, Clone)]
 enum Command {
@@ -127,22 +127,11 @@ fn main() {
           }
         };
         println!("trying to open input for {} with format {}", selection.device, selection.format);
-        match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
-          Err(err) => {
-            something_is_wrong();
-            println!("open input stream error: {}", err);
-            continue;
-          }
-          Ok(input) => {
-            state.input = Some(input);
-          }
-        }
-        println!("input opened!");
+        state.input = Some(unsafe { InputDevice::new(selection.format, selection.device.index) });
       }
       Command::StopInput => {
         current_command = Command::MainMenu;
         state.input = None;
-        println!("stop done!");
       }
     }
   }
