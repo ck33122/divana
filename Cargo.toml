@@ -1,10 +1,8 @@
 [package]
-name = "wtf"
+name = "divana"
 version = "0.1.0"
 authors = ["vadik <mnz-rrh@ya.ru>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 subprocess = { git = "https://github.com/hniksic/rust-subprocess" }
