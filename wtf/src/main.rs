@@ -24,7 +24,6 @@ struct DeviceSelection {
 struct GlobalState {
   device_selection: Option<DeviceSelection>,
   input: Option<InputDevicePtr>,
-  sender: Option<SenderThread>,
 }
 
 lazy_static! {
@@ -53,7 +52,6 @@ fn main() {
   let mut state = GlobalState {
     device_selection: None,
     input: None,
-    sender: None,
   };
   let mut current_command = Command::MainMenu;
   loop {
@@ -91,7 +89,6 @@ fn main() {
       Command::Exit => {
         state.device_selection = None;
         state.input = None;
-        state.sender.take().map(|ref mut t| t.stop());
         return;
       }
       Command::SetupDevice => {
@@ -129,7 +126,6 @@ fn main() {
             continue;
           }
         };
-        state.sender.take().map(|ref mut t| t.stop());
         println!("trying to open input for {} with format {}", selection.device, selection.format);
         match DeviceInfo::open_input_stream(selection.format, selection.device.index) {
           Err(err) => {
@@ -137,9 +133,8 @@ fn main() {
             println!("open input stream error: {}", err);
             continue;
           }
-          Ok((input, sender)) => {
+          Ok(input) => {
             state.input = Some(input);
-            state.sender = Some(sender);
           }
         }
         println!("input opened!");
@@ -147,7 +142,6 @@ fn main() {
       Command::StopInput => {
         current_command = Command::MainMenu;
         state.input = None;
-        state.sender.take().map(|ref mut t| t.stop());
         println!("stop done!");
       }
     }
