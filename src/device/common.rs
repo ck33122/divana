@@ -1,4 +1,54 @@
-use winapi::{shared::minwindef::DWORD, um::mmsystem::*};
+use {
+  std::{
+    alloc::{alloc, alloc_zeroed, dealloc, Layout},
+    ptr::copy_nonoverlapping,
+  },
+  winapi::{shared::minwindef::DWORD, um::mmsystem::*},
+};
+
+pub struct WaveBuffer {
+  pub data: *mut i8,
+  layout: Layout,
+  size: usize,
+}
+
+unsafe impl Send for WaveBuffer {}
+
+impl WaveBuffer {
+  pub fn new(size: usize) -> Self {
+    let layout = match Layout::array::<i8>(size) {
+      Ok(layout) => layout,
+      Err(err) => panic!("cannot determine buffer layout: {}", err),
+    };
+    let data = unsafe { alloc_zeroed(layout) as *mut i8 };
+    Self { data, layout, size }
+  }
+
+  pub fn length(&self) -> u32 {
+    self.size as u32
+  }
+}
+
+impl Clone for WaveBuffer {
+  fn clone(&self) -> Self {
+    unsafe {
+      let data = alloc(self.layout) as *mut i8;
+      copy_nonoverlapping(self.data, data, self.size);
+      Self {
+        data,
+        size: self.size,
+        layout: self.layout,
+      }
+    }
+  }
+}
+
+impl Drop for WaveBuffer {
+  fn drop(&mut self) {
+    println!("WAVEBUFFER DROP");
+    unsafe { dealloc(self.data as *mut u8, self.layout) }
+  }
+}
 
 pub fn mm_error_to_string(r: MMRESULT) -> &'static str {
   match r {
@@ -24,6 +74,10 @@ pub fn mm_error_to_string(r: MMRESULT) -> &'static str {
     MMSYSERR_VALNOTFOUND => "VALNOTFOUND",
     MMSYSERR_NODRIVERCB => "NODRIVERCB",
     MMSYSERR_MOREDATA => "MOREDATA",
+    WAVERR_BADFORMAT => "BADFORMAT",
+    WAVERR_STILLPLAYING => "STILLPLAYING",
+    WAVERR_UNPREPARED => "UNPREPARED",
+    WAVERR_SYNC => "SYNC",
     _ => "[unknown (not MM-system error)]",
   }
 }
@@ -51,5 +105,8 @@ pub fn whdr_to_str(whdr: DWORD) -> String {
   if whdr & WHDR_INQUEUE != 0 {
     res.push("WHDR_INQUEUE")
   };
+  if res.len() == 0 {
+    res.push("NOTHING")
+  }
   res.join(",")
 }

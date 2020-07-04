@@ -4,16 +4,16 @@ extern crate lazy_static;
 mod device;
 mod ui;
 
-use device::{info::*, input::*};
+use device::{info::*, input::*, output::*};
 
 #[derive(Copy, Clone)]
 enum Command {
   MainMenu,
   SetupInput,
   Exit,
-  StartInput,
+  Start,
   SetupOutput,
-  StopInput,
+  Stop,
 }
 
 type CommandDefinition = (&'static str, Command);
@@ -25,7 +25,8 @@ struct DeviceSelection {
 struct GlobalState {
   input_selection: Option<DeviceSelection>,
   output_selection: Option<DeviceSelection>,
-  input: Option<InputDevicePtr>,
+  input: Option<InputDevice>,
+  output: Option<OutputDevice>,
 }
 
 lazy_static! {
@@ -33,8 +34,8 @@ lazy_static! {
     ("input", Command::SetupInput),
     ("output", Command::SetupOutput),
     ("exit", Command::Exit),
-    ("start", Command::StartInput),
-    ("stop", Command::StopInput),
+    ("start", Command::Start),
+    ("stop", Command::Stop),
   ];
 }
 
@@ -56,7 +57,20 @@ fn main() {
     input_selection: None,
     output_selection: None,
     input: None,
+    output: None,
   };
+  //-------------------------------------------------------------------- DEBUG STUFF
+  let (input_devices, output_devices) = (DeviceInfo::input_devices(), DeviceInfo::output_devices());
+  let (input_device, output_device) = (input_devices.first().unwrap().clone(), output_devices.first().unwrap().clone());
+  state.input_selection = Some(DeviceSelection {
+    device: input_device.clone(),
+    format: input_device.get_best_format(),
+  });
+  state.output_selection = Some(DeviceSelection {
+    device: output_device.clone(),
+    format: output_device.get_best_format(),
+  });
+  //-------------------------------------------------------------------- DEBUG STUFF
   let mut current_command = Command::MainMenu;
   loop {
     match current_command {
@@ -136,27 +150,53 @@ fn main() {
         println!("current format: {}", format);
         state.output_selection = Some(DeviceSelection { device, format });
       }
-      Command::StartInput => {
+      Command::Start => {
         current_command = Command::MainMenu;
-        if state.input.is_some() {
+        if state.input.as_ref().is_some() {
           something_is_wrong();
           println!("could not start input because it is already started");
           continue;
         }
-        let selection = match &state.input_selection {
+        if state.output.as_ref().is_some() {
+          something_is_wrong();
+          println!("could not start output because it is already started");
+          continue;
+        }
+        let in_selection = match &state.input_selection {
           Some(v) => v,
           None => {
             something_is_wrong();
-            println!("no device selected (before starting input select device using \"device\" command)");
+            println!("no input device selected (before starting select device using \"input\" command)");
             continue;
           }
         };
-        println!("trying to open input for {} with format {}", selection.device, selection.format);
-        state.input = Some(InputDevice::new(selection.format, selection.device.index));
+        let out_selection = match &state.output_selection {
+          Some(v) => v,
+          None => {
+            something_is_wrong();
+            println!("no output device selected (before starting select device using \"output\" command)");
+            continue;
+          }
+        };
+        println!(
+          "trying to open output for {} with format {}",
+          out_selection.device, out_selection.format
+        );
+        state.output = Some(OutputDevice::new(out_selection.format, out_selection.device.index));
+        println!(
+          "trying to open input for {} with format {}",
+          in_selection.device, in_selection.format
+        );
+        state.input = Some(InputDevice::new(
+          in_selection.format,
+          in_selection.device.index,
+          state.output.as_ref().unwrap().sender.clone(),
+        ));
       }
-      Command::StopInput => {
+      Command::Stop => {
         current_command = Command::MainMenu;
         state.input = None;
+        state.output = None;
       }
     }
   }

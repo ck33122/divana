@@ -1,7 +1,6 @@
 use {
-  crate::device::{common::*, info::*},
+  crate::device::{common::*, info::*, output},
   std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
     mem::{size_of, zeroed},
     pin::Pin,
     sync::{mpsc, mpsc::RecvTimeoutError},
@@ -19,11 +18,11 @@ use {
 };
 
 pub struct InputDevice {
-  sender: mpsc::Sender<SenderSignal>,
+  sender: mpsc::Sender<Command>,
   thread: Option<std::thread::JoinHandle<()>>,
 }
 
-pub enum SenderSignal {
+pub enum Command {
   Init,
   Stop,
   NewData,
@@ -37,14 +36,12 @@ pub enum SenderSignal {
 //   UnknownError,
 // }
 
-pub type InputDevicePtr = Pin<Box<InputDevice>>;
-
 impl Drop for InputDevice {
   fn drop(&mut self) {
     println!("InputDevice.drop is running");
     if self.thread.is_some() {
       println!("InputDevice.drop: sending Stop signal");
-      self.sender.send(SenderSignal::Stop).unwrap();
+      self.sender.send(Command::Stop).unwrap();
       println!("InputDevice.drop: running join!");
       self.thread.take().unwrap().join().unwrap();
       println!("InputDevice.drop: joining done");
@@ -55,49 +52,51 @@ impl Drop for InputDevice {
 
 impl InputDevice {
   // TODO handle errors
-  pub fn new(desired_format: DeviceFormat, device_index: u32) -> InputDevicePtr {
+  pub fn new(desired_format: DeviceFormat, device_index: u32, output: mpsc::Sender<output::Command>) -> InputDevice {
     let (sender, reciever) = mpsc::channel();
-    let thread = thread::spawn(move || unsafe {
-      let mut input_processor = InputProcessor::new(desired_format, device_index);
-      loop {
-        let msg = match reciever.recv_timeout(Duration::from_millis(10)) {
-          Ok(msg) => msg,
-          Err(RecvTimeoutError::Timeout) => SenderSignal::NewData,
-          Err(err) => {
-            println!("ThreadLoop: recv error {}", err);
-            continue;
-          }
-        };
-        match msg {
-          SenderSignal::Init => input_processor.init(),
-          SenderSignal::NewData => input_processor.new_data(),
-          SenderSignal::Stop => {
-            input_processor.stop();
-            break;
+    let thread = thread::Builder::new()
+      .name("input".into())
+      .spawn(move || unsafe {
+        let mut input_processor = InputProcessor::new(desired_format, device_index, output);
+        loop {
+          let msg = match reciever.recv_timeout(Duration::from_millis(10)) {
+            Ok(msg) => msg,
+            Err(RecvTimeoutError::Timeout) => Command::NewData,
+            Err(err) => {
+              println!("InputDevice: recv error {}", err);
+              continue;
+            }
+          };
+          match msg {
+            Command::Init => input_processor.init(),
+            Command::NewData => input_processor.new_data(),
+            Command::Stop => {
+              input_processor.stop();
+              break;
+            }
           }
         }
-      }
-    });
-    sender.send(SenderSignal::Init).unwrap();
-    Box::pin(InputDevice {
+      })
+      .unwrap();
+    sender.send(Command::Init).unwrap();
+    InputDevice {
       sender,
       thread: Some(thread),
-    })
+    }
   }
 }
 
 struct InputProcessor {
+  output: mpsc::Sender<output::Command>,
   format: WAVEFORMATEX,
   device_index: u32,
-  buffer_size: usize,
-  buffer_layout: Layout,
-  buffer: *mut i8,
+  buffer: WaveBuffer,
   handle: HWAVEIN,
   header: WAVEHDR,
 }
 
 impl InputProcessor {
-  unsafe fn new(desired_format: DeviceFormat, device_index: u32) -> InputProcessor {
+  unsafe fn new(desired_format: DeviceFormat, device_index: u32, output: mpsc::Sender<output::Command>) -> InputProcessor {
     let mut format = zeroed::<WAVEFORMATEX>();
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = desired_format.channels;
@@ -106,18 +105,12 @@ impl InputProcessor {
     format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
     format.cbSize = 0;
-    let buffer_size = format.nAvgBytesPerSec as usize;
-    let buffer_layout = match Layout::array::<i8>(buffer_size) {
-      Ok(layout) => layout,
-      Err(err) => panic!("cannot determine buffer layout: {}", err),
-    };
+    let buffer = WaveBuffer::new(format.nAvgBytesPerSec as usize);
     let handle = zeroed::<HWAVEIN>();
     let header = zeroed::<WAVEHDR>();
-    let buffer = alloc_zeroed(buffer_layout) as *mut i8;
     InputProcessor {
+      output,
       format,
-      buffer_size,
-      buffer_layout,
       handle,
       header,
       buffer,
@@ -131,8 +124,8 @@ impl InputProcessor {
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveInOpen: {}", mm_error_to_string(mmresult));
     };
-    self.header.lpData = self.buffer;
-    self.header.dwBufferLength = self.buffer_size as u32;
+    self.header.lpData = self.buffer.data;
+    self.header.dwBufferLength = self.buffer.length();
     let mmresult = waveInPrepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
@@ -146,7 +139,7 @@ impl InputProcessor {
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveInStart: {}", mm_error_to_string(mmresult));
     };
-    println!("SenderThread: initialized!");
+    println!("InputProcessor: initialized!");
   }
 
   unsafe fn new_data(&mut self) {
@@ -163,13 +156,17 @@ impl InputProcessor {
       // if mmresult != MMSYSERR_NOERROR {
       //   panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
       // }
+      if self.header.lpData != self.buffer.data {
+        panic!("self.header.lpData != self.buffer.data")
+      }
+      self.output.send(output::Command::NewData(self.buffer.clone())).unwrap();
       let mmresult = waveInAddBuffer(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         panic!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
       };
       return;
     }
-    println!("WARN: header.dwFlags = {} not handled!", whdr_to_str(self.header.dwFlags));
+    println!("WARN: input header.dwFlags = {} not handled!", whdr_to_str(self.header.dwFlags));
   }
 
   unsafe fn stop(&mut self) {
@@ -193,8 +190,6 @@ impl InputProcessor {
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveInClose: {}", mm_error_to_string(mmresult));
     };
-
-    println!("SenderThread: stop!");
-    dealloc(self.buffer as *mut u8, self.buffer_layout);
+    println!("InputProcessor: stop!");
   }
 }

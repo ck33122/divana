@@ -124,7 +124,6 @@ impl DeviceInfo {
     let mut available_devices: Vec<DeviceInfo> = Vec::new();
     unsafe {
       let device_count = waveOutGetNumDevs();
-      println!("device_count = {}", device_count);
       for device_index in 0..device_count {
         let size = size_of::<WAVEOUTCAPSW>() as u32;
         let mut device_capabilities = zeroed::<WAVEOUTCAPSW>();
