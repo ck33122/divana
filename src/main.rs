@@ -126,9 +126,6 @@ fn pa_test() -> std::result::Result<(), pa::Error> {
 }
 
 fn main() {
-  let mut t = unsafe { std::mem::zeroed::<ogg::ogg_stream_state>() };
-  let v = unsafe { ogg::ogg_stream_init(&mut t, 0) };
-  println!("v: {}", v);
   match pa_test() {
     Ok(_) => {}
     e => {
