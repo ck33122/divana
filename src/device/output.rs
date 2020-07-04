@@ -2,7 +2,6 @@ use {
   crate::device::{common::*, info::*},
   std::{
     mem::{size_of, zeroed},
-    pin::Pin,
     sync::mpsc,
     thread,
   },
@@ -67,7 +66,7 @@ impl OutputDevice {
           };
           match msg {
             Command::Init => output_processor.init(),
-            Command::NewData(buffer) => output_processor.new_data(buffer),
+            Command::NewData(buffer) => output_processor.new_data(&buffer),
             Command::Stop => {
               output_processor.stop();
               break;
@@ -85,6 +84,8 @@ impl OutputDevice {
 }
 
 struct OutputProcessor {
+  buffer: WaveBuffer,
+  header: WAVEHDR,
   format: WAVEFORMATEX,
   device_index: u32,
   handle: HWAVEOUT,
@@ -101,7 +102,11 @@ impl OutputProcessor {
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
     format.cbSize = 0;
     let handle = zeroed::<HWAVEOUT>();
+    let header = zeroed::<WAVEHDR>();
+    let buffer = WaveBuffer::new(format.nAvgBytesPerSec as usize);
     OutputProcessor {
+      buffer,
+      header,
       format,
       handle,
       device_index,
@@ -114,22 +119,35 @@ impl OutputProcessor {
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveOutOpen: {}", mm_error_to_string(mmresult));
     };
+    // let mmresult = waveOutPrepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+    // if mmresult != MMSYSERR_NOERROR {
+    //   panic!("waveOutPrepareHeader: {}", mm_error_to_string(mmresult));
+    // };
     println!("OutputProcessor: initialized!");
   }
 
-  unsafe fn new_data(&mut self, buffer: WaveBuffer) {
+  unsafe fn new_data(&mut self, buffer: &WaveBuffer) {
     // TODO wait device using events
-    let mut header = zeroed::<WAVEHDR>();
-    header.lpData = buffer.data;
-    header.dwBufferLength = buffer.length();
-    let mmresult = waveOutPrepareHeader(self.handle, &mut header, size_of::<WAVEHDR>() as u32);
+    println!("WARN: output header.dwFlags = {} not handled!", whdr_to_str(self.header.dwFlags));
+    while !(self.header.dwFlags == 0 || self.header.dwFlags & WHDR_DONE != 0) {}
+    buffer.copy_to(&mut self.buffer);
+    self.header.lpData = self.buffer.data;
+    self.header.dwBufferLength = self.buffer.length();
+    let mmresult = waveOutPrepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
     if mmresult != MMSYSERR_NOERROR {
       panic!("waveOutPrepareHeader: {}", mm_error_to_string(mmresult));
     };
-    let mmresult = waveOutWrite(self.handle, &mut header, size_of::<WAVEHDR>() as u32);
-    if mmresult != MMSYSERR_NOERROR {
-      panic!("waveOutWrite error {}", mm_error_to_string(mmresult));
-    };
+    loop {
+      let mmresult = waveOutWrite(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+      if mmresult == WAVERR_STILLPLAYING {
+        println!("WAVERR_STILLPLAYING");
+        continue;
+      }
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveOutWrite error {}", mm_error_to_string(mmresult));
+      };
+      break;
+    }
     return;
     // if self.header.dwFlags & WHDR_DONE != 0 {
     //   println!("OutputProcessor: new data");

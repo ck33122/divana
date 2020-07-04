@@ -1,6 +1,6 @@
 use {
   std::{
-    alloc::{alloc, alloc_zeroed, dealloc, Layout},
+    alloc::{alloc_zeroed, dealloc, Layout},
     ptr::copy_nonoverlapping,
   },
   winapi::{shared::minwindef::DWORD, um::mmsystem::*},
@@ -27,19 +27,21 @@ impl WaveBuffer {
   pub fn length(&self) -> u32 {
     self.size as u32
   }
-}
 
-impl Clone for WaveBuffer {
-  fn clone(&self) -> Self {
-    unsafe {
-      let data = alloc(self.layout) as *mut i8;
-      copy_nonoverlapping(self.data, data, self.size);
-      Self {
-        data,
-        size: self.size,
-        layout: self.layout,
-      }
+  pub fn copy_to(&self, dst: &mut Self) {
+    if self.size > dst.size {
+      panic!("original buffer size is bigger than destination, cannot perform copy_to")
     }
+    unsafe { copy_nonoverlapping(self.data, dst.data, self.size) };
+  }
+
+  pub fn partially_clone(&self, partition_size: u32) -> Self {
+    if partition_size > self.size as u32 {
+      panic!("partition_size could not be bigger than original size")
+    }
+    let buffer = WaveBuffer::new(partition_size as usize);
+    unsafe { copy_nonoverlapping(self.data, buffer.data, partition_size as usize) };
+    buffer
   }
 }
 
@@ -91,22 +93,22 @@ pub const WHDR_INQUEUE: DWORD = 0x00000010; // reserved for driver
 pub fn whdr_to_str(whdr: DWORD) -> String {
   let mut res = vec![];
   if whdr & WHDR_DONE != 0 {
-    res.push("WHDR_DONE")
+    res.push("WHDR_DONE".into())
   };
   if whdr & WHDR_PREPARED != 0 {
-    res.push("WHDR_PREPARED")
+    res.push("WHDR_PREPARED".into())
   };
   if whdr & WHDR_BEGINLOOP != 0 {
-    res.push("WHDR_BEGINLOOP")
+    res.push("WHDR_BEGINLOOP".into())
   };
   if whdr & WHDR_ENDLOOP != 0 {
-    res.push("WHDR_ENDLOOP")
+    res.push("WHDR_ENDLOOP".into())
   };
   if whdr & WHDR_INQUEUE != 0 {
-    res.push("WHDR_INQUEUE")
+    res.push("WHDR_INQUEUE".into())
   };
   if res.len() == 0 {
-    res.push("NOTHING")
+    res.push(format!("UNKNOWN {}", whdr))
   }
   res.join(",")
 }

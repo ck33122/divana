@@ -2,7 +2,6 @@ use {
   crate::device::{common::*, info::*, output},
   std::{
     mem::{size_of, zeroed},
-    pin::Pin,
     sync::{mpsc, mpsc::RecvTimeoutError},
     thread,
     time::Duration,
@@ -100,9 +99,9 @@ impl InputProcessor {
     let mut format = zeroed::<WAVEFORMATEX>();
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = desired_format.channels;
-    format.nSamplesPerSec = desired_format.frequency; // assumes that channels = 1
+    format.nSamplesPerSec = desired_format.frequency;
     format.wBitsPerSample = desired_format.bits;
-    format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
+    format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels;
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
     format.cbSize = 0;
     let buffer = WaveBuffer::new(format.nAvgBytesPerSec as usize);
@@ -147,7 +146,6 @@ impl InputProcessor {
       return;
     }
     if self.header.dwFlags & WHDR_DONE != 0 {
-      println!("SenderThread: new data");
       // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
       // header.lpData: *mut i8
       // header.dwBufferLength: u32
@@ -156,10 +154,8 @@ impl InputProcessor {
       // if mmresult != MMSYSERR_NOERROR {
       //   panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
       // }
-      if self.header.lpData != self.buffer.data {
-        panic!("self.header.lpData != self.buffer.data")
-      }
-      self.output.send(output::Command::NewData(self.buffer.clone())).unwrap();
+      let send_buffer = self.buffer.partially_clone(self.header.dwBytesRecorded);
+      self.output.send(output::Command::NewData(send_buffer)).unwrap();
       let mmresult = waveInAddBuffer(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
       if mmresult != MMSYSERR_NOERROR {
         panic!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
