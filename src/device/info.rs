@@ -1,4 +1,5 @@
 use {
+  crate::device::common::*,
   std::{
     fmt,
     mem::{size_of, zeroed},
@@ -6,7 +7,7 @@ use {
   winapi::{
     shared::{basetsd::UINT_PTR, minwindef::DWORD},
     um::{
-      mmeapi::{waveInGetDevCapsW, waveInGetNumDevs},
+      mmeapi::{waveInGetDevCapsW, waveInGetNumDevs, waveOutGetDevCapsW, waveOutGetNumDevs},
       mmsystem::*,
     },
   },
@@ -98,7 +99,41 @@ impl DeviceInfo {
       for device_index in 0..device_count {
         let size = size_of::<WAVEINCAPSW>() as u32;
         let mut device_capabilities = zeroed::<WAVEINCAPSW>();
-        if waveInGetDevCapsW(device_index as UINT_PTR, &mut device_capabilities, size) != MMSYSERR_NOERROR {
+        let mmresult = waveInGetDevCapsW(device_index as UINT_PTR, &mut device_capabilities, size);
+        if mmresult != MMSYSERR_NOERROR {
+          println!("waveInGetDevCapsW: {}", mm_error_to_string(mmresult));
+          continue;
+        }
+        let name = match String::from_utf16(&device_capabilities.szPname) {
+          Ok(res) => res,
+          _ => continue,
+        };
+        let formats = DeviceFormat::unpack(device_capabilities.dwFormats);
+        let info = DeviceInfo {
+          index: device_index,
+          name,
+          formats,
+        };
+        if info.formats.is_empty() {
+          continue;
+        }
+        available_devices.push(info);
+      }
+    }
+    available_devices
+  }
+
+  pub fn output_devices() -> Vec<DeviceInfo> {
+    let mut available_devices: Vec<DeviceInfo> = Vec::new();
+    unsafe {
+      let device_count = waveOutGetNumDevs();
+      println!("device_count = {}", device_count);
+      for device_index in 0..device_count {
+        let size = size_of::<WAVEOUTCAPSW>() as u32;
+        let mut device_capabilities = zeroed::<WAVEOUTCAPSW>();
+        let mmresult = waveOutGetDevCapsW(device_index as UINT_PTR, &mut device_capabilities, size);
+        if mmresult != MMSYSERR_NOERROR {
+          println!("waveOutGetDevCapsW: {}", mm_error_to_string(mmresult));
           continue;
         }
         let name = match String::from_utf16(&device_capabilities.szPname) {

@@ -9,9 +9,10 @@ use device::{info::*, input::*};
 #[derive(Copy, Clone)]
 enum Command {
   MainMenu,
-  SetupDevice,
+  SetupInput,
   Exit,
   StartInput,
+  SetupOutput,
   StopInput,
 }
 
@@ -22,15 +23,17 @@ struct DeviceSelection {
   format: DeviceFormat,
 }
 struct GlobalState {
-  device_selection: Option<DeviceSelection>,
+  input_selection: Option<DeviceSelection>,
+  output_selection: Option<DeviceSelection>,
   input: Option<InputDevicePtr>,
 }
 
 lazy_static! {
-  static ref COMMAND_MAP: [CommandDefinition; 4] = [
-    ("device", Command::SetupDevice),
+  static ref COMMAND_MAP: [CommandDefinition; 5] = [
+    ("input", Command::SetupInput),
+    ("output", Command::SetupOutput),
     ("exit", Command::Exit),
-    ("input", Command::StartInput),
+    ("start", Command::StartInput),
     ("stop", Command::StopInput),
   ];
 }
@@ -50,7 +53,8 @@ fn something_is_wrong() {
 
 fn main() {
   let mut state = GlobalState {
-    device_selection: None,
+    input_selection: None,
+    output_selection: None,
     input: None,
   };
   let mut current_command = Command::MainMenu;
@@ -87,11 +91,12 @@ fn main() {
         };
       }
       Command::Exit => {
-        state.device_selection = None;
+        state.input_selection = None;
+        state.output_selection = None;
         state.input = None;
         return;
       }
-      Command::SetupDevice => {
+      Command::SetupInput => {
         current_command = Command::MainMenu;
         if state.input.is_some() {
           something_is_wrong();
@@ -109,7 +114,27 @@ fn main() {
         let format = device.get_best_format();
         println!("selected device: {}", device);
         println!("current format: {}", format);
-        state.device_selection = Some(DeviceSelection { device, format });
+        state.input_selection = Some(DeviceSelection { device, format });
+      }
+      Command::SetupOutput => {
+        current_command = Command::MainMenu;
+        // if state.input.is_some() {
+        //   something_is_wrong();
+        //   println!("cannot setup device because some device already used. need to stop it first");
+        //   continue;
+        // }
+        let device = match ui::process_select_one_of(DeviceInfo::output_devices()) {
+          Some(device) => device,
+          None => {
+            something_is_wrong();
+            println!("no device is currently available (may be there is no devices in your computer?)");
+            continue;
+          }
+        };
+        let format = device.get_best_format();
+        println!("selected device: {}", device);
+        println!("current format: {}", format);
+        state.input_selection = Some(DeviceSelection { device, format });
       }
       Command::StartInput => {
         current_command = Command::MainMenu;
@@ -118,7 +143,7 @@ fn main() {
           println!("could not start input because it is already started");
           continue;
         }
-        let selection = match &state.device_selection {
+        let selection = match &state.input_selection {
           Some(v) => v,
           None => {
             something_is_wrong();

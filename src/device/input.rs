@@ -1,5 +1,5 @@
-use crate::device::info::DeviceFormat;
 use {
+  crate::device::{common::*, info::*},
   std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     mem::{size_of, zeroed},
@@ -200,32 +200,4 @@ fn whdr_to_str(whdr: DWORD) -> String {
     res.push("WHDR_INQUEUE")
   };
   res.join(",")
-}
-
-fn mm_error_to_string(r: MMRESULT) -> &'static str {
-  match r {
-    MMSYSERR_NOERROR => "NOERROR",
-    MMSYSERR_ERROR => "ERROR",
-    MMSYSERR_BADDEVICEID => "BADDEVICEID",
-    MMSYSERR_NOTENABLED => "NOTENABLED",
-    MMSYSERR_ALLOCATED => "ALLOCATED",
-    MMSYSERR_INVALHANDLE => "INVALHANDLE",
-    MMSYSERR_NODRIVER => "NODRIVER",
-    MMSYSERR_NOMEM => "NOMEM",
-    MMSYSERR_NOTSUPPORTED => "NOTSUPPORTED",
-    MMSYSERR_BADERRNUM => "BADERRNUM",
-    MMSYSERR_INVALFLAG => "INVALFLAG",
-    MMSYSERR_INVALPARAM => "INVALPARAM",
-    MMSYSERR_HANDLEBUSY => "HANDLEBUSY",
-    MMSYSERR_INVALIDALIAS => "INVALIDALIAS",
-    MMSYSERR_BADDB => "BADDB",
-    MMSYSERR_KEYNOTFOUND => "KEYNOTFOUND",
-    MMSYSERR_READERROR => "READERROR",
-    MMSYSERR_WRITEERROR => "WRITEERROR",
-    MMSYSERR_DELETEERROR => "DELETEERROR",
-    MMSYSERR_VALNOTFOUND => "VALNOTFOUND",
-    MMSYSERR_NODRIVERCB => "NODRIVERCB",
-    MMSYSERR_MOREDATA => "MOREDATA",
-    _ => "[unknown (not MM-system error)]",
-  }
 }
