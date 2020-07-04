@@ -6,10 +6,7 @@ use {
   },
   winapi::{
     shared::{basetsd::UINT_PTR, minwindef::DWORD},
-    um::{
-      mmeapi::{waveInGetDevCapsW, waveInGetNumDevs, waveOutGetDevCapsW, waveOutGetNumDevs},
-      mmsystem::*,
-    },
+    um::{mmeapi::*, mmsystem::*},
   },
 };
 

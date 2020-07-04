@@ -12,15 +12,9 @@ use {
   winapi::{
     shared::{
       basetsd::DWORD_PTR,
-      minwindef::DWORD,
       mmreg::{WAVEFORMATEX, WAVE_FORMAT_PCM},
     },
-    um::{
-      mmeapi::{
-        waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart, waveInStop, waveInUnprepareHeader,
-      },
-      mmsystem::*,
-    },
+    um::{mmeapi::*, mmsystem::*},
   },
 };
 
@@ -60,109 +54,25 @@ impl Drop for InputDevice {
 }
 
 impl InputDevice {
-  fn buffer_layout(buffer_size: usize) -> Layout {
-    match Layout::array::<i8>(buffer_size) {
-      Ok(layout) => layout,
-      Err(_) => panic!("cannot determine buffer layout"),
-    }
-  }
-
   // TODO handle errors
-  pub unsafe fn new(desired_format: DeviceFormat, device_index: u32) -> InputDevicePtr {
-    let mut format = zeroed::<WAVEFORMATEX>();
-    format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = desired_format.channels;
-    format.nSamplesPerSec = desired_format.frequency; // assumes that channels = 1
-    format.wBitsPerSample = desired_format.bits;
-    format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
-    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
-    format.cbSize = 0;
-    let buffer_size = format.nAvgBytesPerSec as usize;
-    let buffer_layout = Self::buffer_layout(buffer_size);
+  pub fn new(desired_format: DeviceFormat, device_index: u32) -> InputDevicePtr {
     let (sender, reciever) = mpsc::channel();
-
-    let thread = thread::spawn(move || {
-      let mut handle = zeroed::<HWAVEIN>();
-      let mut header = zeroed::<WAVEHDR>();
-      let buffer = alloc_zeroed(buffer_layout) as *mut i8;
+    let thread = thread::spawn(move || unsafe {
+      let mut input_processor = InputProcessor::new(desired_format, device_index);
       loop {
-        let msg = match reciever.recv_timeout(Duration::from_millis(25)) {
+        let msg = match reciever.recv_timeout(Duration::from_millis(10)) {
           Ok(msg) => msg,
           Err(RecvTimeoutError::Timeout) => SenderSignal::NewData,
           Err(err) => {
-            println!("SenderThread: recv error {}", err);
+            println!("ThreadLoop: recv error {}", err);
             continue;
           }
         };
         match msg {
-          SenderSignal::Init => {
-            // WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
-            let mmresult = waveInOpen(&mut handle, device_index, &format, 0 as DWORD_PTR, 0 as DWORD_PTR, 0);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInOpen: {}", mm_error_to_string(mmresult));
-            };
-            header.lpData = buffer;
-            header.dwBufferLength = buffer_size as u32;
-            let mmresult = waveInPrepareHeader(handle, &mut header, size_of::<WAVEHDR>() as u32);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
-            };
-            let mmresult = waveInAddBuffer(handle, &mut header, size_of::<WAVEHDR>() as u32);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInAddBuffer: {}", mm_error_to_string(mmresult));
-            };
-            println!("running input");
-            let mmresult = waveInStart(handle);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInStart: {}", mm_error_to_string(mmresult));
-            };
-            println!("SenderThread: initialized!");
-          }
-          SenderSignal::NewData => {
-            if header.dwFlags & WHDR_INQUEUE != 0 {
-              continue;
-            }
-            if header.dwFlags & WHDR_DONE != 0 {
-              println!("SenderThread: new data");
-              // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
-              // header.lpData: *mut i8
-              // header.dwBufferLength: u32
-              let mmresult = waveInPrepareHeader(handle, &mut header, size_of::<WAVEHDR>() as u32);
-              if mmresult != MMSYSERR_NOERROR {
-                panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
-              }
-              let mmresult = waveInAddBuffer(handle, &mut header, size_of::<WAVEHDR>() as u32);
-              if mmresult != MMSYSERR_NOERROR {
-                panic!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
-              };
-              continue;
-            }
-            println!("WARN: header.dwFlags = {} not handled!", whdr_to_str(header.dwFlags));
-          }
+          SenderSignal::Init => input_processor.init(),
+          SenderSignal::NewData => input_processor.new_data(),
           SenderSignal::Stop => {
-            println!("waveInStop");
-            let mmresult = waveInStop(handle);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInStop: {}", mm_error_to_string(mmresult));
-            };
-            println!("waveInReset");
-            let mmresult = waveInReset(handle);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInReset: {}", mm_error_to_string(mmresult));
-            };
-            println!("waveInUnprepareHeader");
-            let mmresult = waveInUnprepareHeader(handle, &mut header, size_of::<WAVEHDR>() as u32);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInUnprepareHeader: {}", mm_error_to_string(mmresult));
-            };
-            println!("waveInClose");
-            let mmresult = waveInClose(handle);
-            if mmresult != MMSYSERR_NOERROR {
-              panic!("waveInClose: {}", mm_error_to_string(mmresult));
-            };
-
-            println!("SenderThread: stop!");
-            dealloc(buffer as *mut u8, buffer_layout);
+            input_processor.stop();
             break;
           }
         }
@@ -176,28 +86,115 @@ impl InputDevice {
   }
 }
 
-const WHDR_DONE: DWORD = 0x00000001; /* done bit */
-const WHDR_PREPARED: DWORD = 0x00000002; /* set if this header has been prepared */
-const WHDR_BEGINLOOP: DWORD = 0x00000004; /* loop start block */
-const WHDR_ENDLOOP: DWORD = 0x00000008; /* loop end block */
-const WHDR_INQUEUE: DWORD = 0x00000010; /* reserved for driver */
+struct InputProcessor {
+  format: WAVEFORMATEX,
+  device_index: u32,
+  buffer_size: usize,
+  buffer_layout: Layout,
+  buffer: *mut i8,
+  handle: HWAVEIN,
+  header: WAVEHDR,
+}
 
-fn whdr_to_str(whdr: DWORD) -> String {
-  let mut res = vec![];
-  if whdr & WHDR_DONE != 0 {
-    res.push("WHDR_DONE")
-  };
-  if whdr & WHDR_PREPARED != 0 {
-    res.push("WHDR_PREPARED")
-  };
-  if whdr & WHDR_BEGINLOOP != 0 {
-    res.push("WHDR_BEGINLOOP")
-  };
-  if whdr & WHDR_ENDLOOP != 0 {
-    res.push("WHDR_ENDLOOP")
-  };
-  if whdr & WHDR_INQUEUE != 0 {
-    res.push("WHDR_INQUEUE")
-  };
-  res.join(",")
+impl InputProcessor {
+  unsafe fn new(desired_format: DeviceFormat, device_index: u32) -> InputProcessor {
+    let mut format = zeroed::<WAVEFORMATEX>();
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nChannels = desired_format.channels;
+    format.nSamplesPerSec = desired_format.frequency; // assumes that channels = 1
+    format.wBitsPerSample = desired_format.bits;
+    format.nBlockAlign = (format.wBitsPerSample / 8) * format.nChannels; // idk what is that
+    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign as u32;
+    format.cbSize = 0;
+    let buffer_size = format.nAvgBytesPerSec as usize;
+    let buffer_layout = match Layout::array::<i8>(buffer_size) {
+      Ok(layout) => layout,
+      Err(err) => panic!("cannot determine buffer layout: {}", err),
+    };
+    let handle = zeroed::<HWAVEIN>();
+    let header = zeroed::<WAVEHDR>();
+    let buffer = alloc_zeroed(buffer_layout) as *mut i8;
+    InputProcessor {
+      format,
+      buffer_size,
+      buffer_layout,
+      handle,
+      header,
+      buffer,
+      device_index,
+    }
+  }
+
+  unsafe fn init(&mut self) {
+    // WAVE_FORMAT_DIRECT??? does not perform conversions on the audio data
+    let mmresult = waveInOpen(&mut self.handle, self.device_index, &self.format, 0 as DWORD_PTR, 0 as DWORD_PTR, 0);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInOpen: {}", mm_error_to_string(mmresult));
+    };
+    self.header.lpData = self.buffer;
+    self.header.dwBufferLength = self.buffer_size as u32;
+    let mmresult = waveInPrepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
+    };
+    let mmresult = waveInAddBuffer(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInAddBuffer: {}", mm_error_to_string(mmresult));
+    };
+    println!("running input");
+    let mmresult = waveInStart(self.handle);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInStart: {}", mm_error_to_string(mmresult));
+    };
+    println!("SenderThread: initialized!");
+  }
+
+  unsafe fn new_data(&mut self) {
+    if self.header.dwFlags & WHDR_INQUEUE != 0 {
+      return;
+    }
+    if self.header.dwFlags & WHDR_DONE != 0 {
+      println!("SenderThread: new data");
+      // see https://docs.rs/winapi/0.3.8/i686-pc-windows-msvc/winapi/um/mmsystem/struct.WAVEHDR.html
+      // header.lpData: *mut i8
+      // header.dwBufferLength: u32
+      //
+      // let mmresult = waveInPrepareHeader(handle, &mut header, size_of::<WAVEHDR>() as u32);
+      // if mmresult != MMSYSERR_NOERROR {
+      //   panic!("waveInPrepareHeader: {}", mm_error_to_string(mmresult));
+      // }
+      let mmresult = waveInAddBuffer(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+      if mmresult != MMSYSERR_NOERROR {
+        panic!("waveInAddBuffer error {}", mm_error_to_string(mmresult));
+      };
+      return;
+    }
+    println!("WARN: header.dwFlags = {} not handled!", whdr_to_str(self.header.dwFlags));
+  }
+
+  unsafe fn stop(&mut self) {
+    println!("waveInStop");
+    let mmresult = waveInStop(self.handle);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInStop: {}", mm_error_to_string(mmresult));
+    };
+    println!("waveInReset");
+    let mmresult = waveInReset(self.handle);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInReset: {}", mm_error_to_string(mmresult));
+    };
+    println!("waveInUnprepareHeader");
+    let mmresult = waveInUnprepareHeader(self.handle, &mut self.header, size_of::<WAVEHDR>() as u32);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInUnprepareHeader: {}", mm_error_to_string(mmresult));
+    };
+    println!("waveInClose");
+    let mmresult = waveInClose(self.handle);
+    if mmresult != MMSYSERR_NOERROR {
+      panic!("waveInClose: {}", mm_error_to_string(mmresult));
+    };
+
+    println!("SenderThread: stop!");
+    dealloc(self.buffer as *mut u8, self.buffer_layout);
+  }
 }

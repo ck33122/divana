@@ -134,7 +134,7 @@ fn main() {
         let format = device.get_best_format();
         println!("selected device: {}", device);
         println!("current format: {}", format);
-        state.input_selection = Some(DeviceSelection { device, format });
+        state.output_selection = Some(DeviceSelection { device, format });
       }
       Command::StartInput => {
         current_command = Command::MainMenu;
@@ -152,7 +152,7 @@ fn main() {
           }
         };
         println!("trying to open input for {} with format {}", selection.device, selection.format);
-        state.input = Some(unsafe { InputDevice::new(selection.format, selection.device.index) });
+        state.input = Some(InputDevice::new(selection.format, selection.device.index));
       }
       Command::StopInput => {
         current_command = Command::MainMenu;
