@@ -3,9 +3,11 @@ name = "divana"
 version = "0.1.0"
 authors = ["vadik <mnz-rrh@ya.ru>"]
 edition = "2018"
+rustc-link-search = "."
 
 [dependencies]
 subprocess = { git = "https://github.com/hniksic/rust-subprocess" }
 winapi = { version = "0.3.8", features = ["mmeapi", "winuser"] }
 lazy_static = "1.4.0"
 thiserror = "1.0.19"
+portaudio = "0.7.0"

@@ -5,6 +5,7 @@ mod device;
 mod ui;
 
 use device::{info::*, input::*, output::*};
+use portaudio as pa;
 
 #[derive(Copy, Clone)]
 enum Command {
@@ -53,6 +54,10 @@ fn something_is_wrong() {
 }
 
 fn main() {
+  let pa = pa::PortAudio::new().unwrap();
+  let num_devices = pa.device_count().unwrap();
+  println!("Number of devices = {}", num_devices);
+
   let mut state = GlobalState {
     input_selection: None,
     output_selection: None,
