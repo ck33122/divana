@@ -11,3 +11,4 @@ winapi = { version = "0.3.8", features = ["mmeapi", "winuser"] }
 lazy_static = "1.4.0"
 thiserror = "1.0.19"
 portaudio = "0.7.0"
+libc = "0.2.71"

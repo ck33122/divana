@@ -3,9 +3,11 @@ extern crate lazy_static;
 
 mod device;
 mod ui;
+mod vorbis;
 
 use device::{info::*, input::*, output::*};
 use portaudio as pa;
+use vorbis::ogg;
 
 #[derive(Copy, Clone)]
 enum Command {
@@ -53,11 +55,88 @@ fn something_is_wrong() {
   // unsafe { MessageBeep(MB_ICONERROR) };
 }
 
-fn main() {
-  let pa = pa::PortAudio::new().unwrap();
-  let num_devices = pa.device_count().unwrap();
-  println!("Number of devices = {}", num_devices);
+fn pa_test() -> std::result::Result<(), pa::Error> {
+  const SAMPLE_RATE: f64 = 44_100.0;
+  const FRAMES: u32 = 256;
+  const CHANNELS: i32 = 2;
+  const INTERLEAVED: bool = true;
 
+  let pa = pa::PortAudio::new()?;
+  let default_host = pa.default_host_api()?;
+  println!("default host: {:#?}", pa.host_api_info(default_host));
+  let def_input = pa.default_input_device()?;
+  let input_info = pa.device_info(def_input)?;
+  println!("Default input device info: {:#?}", &input_info);
+  let latency = input_info.default_low_input_latency;
+  let input_params = pa::StreamParameters::<f32>::new(def_input, CHANNELS, INTERLEAVED, latency);
+  let def_output = pa.default_output_device()?;
+  let output_info = pa.device_info(def_output)?;
+  println!("Default output device info: {:#?}", &output_info);
+  let latency = output_info.default_low_output_latency;
+  let output_params = pa::StreamParameters::new(def_output, CHANNELS, INTERLEAVED, latency);
+  pa.is_duplex_format_supported(input_params, output_params, SAMPLE_RATE)?;
+  let settings = pa::DuplexStreamSettings::new(input_params, output_params, SAMPLE_RATE, FRAMES);
+
+  let mut count_down = 20.0;
+  let mut maybe_last_time = None;
+  let (sender, receiver) = ::std::sync::mpsc::channel();
+  // A callback to pass to the non-blocking stream.
+  let callback = move |pa::DuplexStreamCallbackArgs {
+                         in_buffer,
+                         out_buffer,
+                         frames,
+                         time,
+                         ..
+                       }| {
+    let current_time = time.current;
+    let prev_time = maybe_last_time.unwrap_or(current_time);
+    let dt = current_time - prev_time;
+    count_down -= dt;
+    maybe_last_time = Some(current_time);
+
+    assert!(frames == FRAMES as usize);
+    sender.send(count_down).ok();
+
+    // println!("{:#?}", out_buffer);
+
+    for (output_sample, input_sample) in out_buffer.iter_mut().zip(in_buffer.iter()) {
+      *output_sample = *input_sample;
+    }
+
+    if count_down > 0.0 {
+      pa::Continue
+    } else {
+      pa::Complete
+    }
+  };
+
+  let mut stream = pa.open_non_blocking_stream(settings, callback)?;
+  stream.start()?;
+
+  // Loop while the non-blocking stream is active.
+  while let true = stream.is_active()? {
+    // Do some stuff!
+    while let Ok(count_down) = receiver.try_recv() {
+      // println!("count_down: {:?}", count_down);
+    }
+  }
+
+  stream.stop()?;
+  Ok(())
+}
+
+fn main() {
+  let mut t = unsafe { std::mem::zeroed::<ogg::ogg_stream_state>() };
+  let v = unsafe { ogg::ogg_stream_init(&mut t, 0) };
+  println!("v: {}", v);
+  match pa_test() {
+    Ok(_) => {}
+    e => {
+      eprintln!("Example failed with the following: {:?}", e);
+    }
+  }
+  println!("exiting!");
+  return;
   let mut state = GlobalState {
     input_selection: None,
     output_selection: None,
