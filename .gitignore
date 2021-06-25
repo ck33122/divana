@@ -1,5 +1,7 @@
 target
 .idea
 .vs
-.vscode/launch.json
+.vscode
 wtf
+*.exe
+*config.ini
