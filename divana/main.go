@@ -1,7 +1,10 @@
 package main
 
 import (
+	"log"
+
 	"github.com/cprkv/divana/divana/config"
+	"github.com/cprkv/divana/divana/sound"
 	"github.com/cprkv/divana/divana/ui"
 )
 
@@ -10,26 +13,25 @@ var (
 )
 
 func main() {
-	defer ui.HandleMainRecover()
+	defer ui.HandleMainRecover("Divana")
+
 	cfg = config.Load()
 
-	window := ui.CreateWindow("Divana", 640, 480)
-	
-	mainDiskSelectPanel := window.AddPanelLineNext()
-	mainDiskSelectEditor := window.AddFolderSelectChild(mainDiskSelectPanel, "Main recovery disk path", cfg.MainDiskPath)
-	mainDiskSelectEditor.SetOnTextChange(func() {
-		cfg.MainDiskPath = mainDiskSelectEditor.Text()
-		config.Save(cfg)
-	})
+	sound.ContextInit()
+	defer sound.ContextDestroy()
 
-	driverDiskSelectPanel := window.AddPanelLineNext()
-	driverDiskSelectEditor := window.AddFolderSelectChild(driverDiskSelectPanel, "Driver disk path", cfg.DriverDiskPath)
-	driverDiskSelectEditor.SetOnTextChange(func() {
-		cfg.DriverDiskPath = driverDiskSelectEditor.Text()
-		config.Save(cfg)
-	})
-	
-	window.Show()
+	playback := sound.EnumeratePlaybackDevices()
+	capture := sound.EnumerateCaptureDevices()
+
+	log.Println("playback devices:")
+	for _, dev := range playback {
+		log.Printf("  %s", dev.ToString())
+	}
+
+	log.Println("capture devices:")
+	for _, dev := range capture {
+		log.Printf("  %s", dev.ToString())
+	}
+
+	ui.Example()
 }
-
-
