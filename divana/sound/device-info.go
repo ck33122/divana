@@ -29,7 +29,32 @@ func (dev *DeviceInfo) ToString() string {
 	if dev.MinSampleRate == dev.MaxSampleRate {
 		sampleRate = fmt.Sprintf("%vhz", dev.MinSampleRate)
 	}
-	return fmt.Sprintf("[%v] %s [%v] [%s], [%s]", dev.IDStr, dev.Name, dev.IsDefault, channelInfo, sampleRate)
+	formats := ""
+	for i := range dev.Formats {
+		format := "<unknown>"
+		switch dev.Formats[i] {
+		case uint32(malgo.FormatU8):
+			format = "U8"
+		case uint32(malgo.FormatS16):
+			format = "S16"
+		case uint32(malgo.FormatS24):
+			format = "S24"
+		case uint32(malgo.FormatS32):
+			format = "S32"
+		case uint32(malgo.FormatF32):
+			format = "F32"
+		}
+		if len(formats) > 0 {
+			formats = fmt.Sprintf("%s/%v", formats, format)
+		} else {
+			formats = fmt.Sprintf("%v", format)
+		}
+	}
+	isDefault := ""
+	if dev.IsDefault {
+		isDefault = "[default] "
+	}
+	return fmt.Sprintf("[%v] %s %s[%s] [%s] [%s]", dev.IDStr, dev.Name, isDefault, channelInfo, sampleRate, formats)
 }
 
 func EnumeratePlaybackDevices() []DeviceInfo {
