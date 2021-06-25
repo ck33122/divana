@@ -5,8 +5,8 @@ import (
 )
 
 type Data struct {
-	MainDiskPath   string
-	DriverDiskPath string
+	OutputDeviceId string
+	InputDeviceId  string
 }
 
 const (
@@ -15,8 +15,8 @@ const (
 
 func Save(data *Data) {
 	cfg := ini.Empty()
-	cfg.Section("").Key("MainDiskPath").SetValue(data.MainDiskPath)
-	cfg.Section("").Key("DriverDiskPath").SetValue(data.DriverDiskPath)
+	cfg.Section("").Key("OutputDeviceId").SetValue(data.OutputDeviceId)
+	cfg.Section("").Key("InputDeviceId").SetValue(data.InputDeviceId)
 	err := cfg.SaveTo(configName)
 	if err != nil {
 		panic(err)
@@ -27,12 +27,12 @@ func Load() *Data {
 	cfg, err := ini.Load(configName)
 	if err != nil {
 		return &Data{
-			MainDiskPath:   "",
-			DriverDiskPath: "",
+			OutputDeviceId: "",
+			InputDeviceId:  "",
 		}
 	}
 	return &Data{
-		MainDiskPath:   cfg.Section("").Key("MainDiskPath").String(),
-		DriverDiskPath: cfg.Section("").Key("DriverDiskPath").String(),
+		OutputDeviceId: cfg.Section("").Key("OutputDeviceId").String(),
+		InputDeviceId:  cfg.Section("").Key("InputDeviceId").String(),
 	}
 }

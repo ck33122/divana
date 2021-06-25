@@ -24,5 +24,5 @@ func Example() {
 }
 
 func init() {
-	application = app.New()
+	application = app.NewWithID("divana")
 }

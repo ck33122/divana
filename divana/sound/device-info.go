@@ -20,7 +20,7 @@ type DeviceInfo struct {
 	MaxSampleRate uint32
 }
 
-func (dev *DeviceInfo) ToString() string {
+func (dev *DeviceInfo) ToString(includeId bool) string {
 	channelInfo := fmt.Sprintf("%vch-%vch", dev.MinChannels, dev.MaxChannels)
 	if dev.MinChannels == dev.MaxChannels {
 		channelInfo = fmt.Sprintf("%vch", dev.MinChannels)
@@ -54,7 +54,11 @@ func (dev *DeviceInfo) ToString() string {
 	if dev.IsDefault {
 		isDefault = "[default] "
 	}
-	return fmt.Sprintf("[%v] %s %s[%s] [%s] [%s]", dev.IDStr, dev.Name, isDefault, channelInfo, sampleRate, formats)
+	idStr := ""
+	if includeId {
+		idStr = fmt.Sprintf("[%s] ", dev.IDStr)
+	}
+	return fmt.Sprintf("%s%s %s[%s] [%s] [%s]", idStr, dev.Name, isDefault, channelInfo, sampleRate, formats)
 }
 
 func EnumeratePlaybackDevices() []DeviceInfo {
